@@ -619,3 +619,26 @@ def point_plot_fast(encoded_points, labels, batch_idx, config, show_title=True, 
 
     # Return the figure
     return fig
+
+
+def plot_2d_encoding(encoded_points, color_labels, cmap, opacity, save_plot=False, size_of_points = 40, verbose=True, 
+                     Saving_file_name=None, Plot_title= None):
+    plt.figure(figsize=(9,9),dpi=400)
+    plt.rcParams.update({'font.size': 20}) # makes all fonts on the plot be 20
+    plt.scatter( encoded_points[:,0], encoded_points[:,1], 
+                c=color_labels, s= size_of_points,
+                alpha=opacity, 
+                cmap=cmap,
+                marker='o',
+                edgecolors=None )
+    if save_plot == True:
+        if Saving_file_name == None:
+            print("file cannot be saved, please set file name in Saving_file_name")
+        else:
+            plt.savefig(Saving_file_name,bbox_inches='tight',format='pdf')
+    if Plot_title != None:
+        plt.title(Plot_title)
+    if verbose == True:
+        plt.show()
+    else:
+        plt.close()

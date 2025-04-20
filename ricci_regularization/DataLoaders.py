@@ -5,9 +5,11 @@ from torch.utils.data import Subset
 from torchvision import datasets, transforms
 import sklearn
 import ricci_regularization
+from tqdm.notebook import tqdm
 
-def get_dataloaders(dataset_config: dict, data_loader_config: dict, dtype: str):
-    datasets_root = '../../datasets/'  # Root directory for datasets
+def get_dataloaders(dataset_config: dict, data_loader_config: dict, dtype: str, datasets_root = None):
+    if datasets_root == None:
+        datasets_root = '../../datasets/'  # Root directory for datasets
 
     # Load dataset based on the name provided in dataset_config
     torch.manual_seed(data_loader_config["random_seed"])  # Set the random seed for reproducibility
@@ -85,7 +87,7 @@ def get_dataloaders(dataset_config: dict, data_loader_config: dict, dtype: str):
     return loaders
 
 
-def get_tuned_nn(config: dict, additional_path = ''):
+def get_tuned_nn(config: dict, additional_path = '', verbose = True):
     # this function returns the initialized and loaded model  and the path to the model weights
     latent_dim = config["architecture"]["latent_dim"]
     input_dim  = config["architecture"]["input_dim"]
@@ -96,7 +98,8 @@ def get_tuned_nn(config: dict, additional_path = ''):
     except KeyError:
         # Default to "TorusAE" if the architecture type is not specified
         architecture_type = "TorusAE"
-    print("Chosen architecture:",architecture_type)
+    if verbose == True:
+        print("Chosen architecture:",architecture_type)
     # Initialize the neural network based on the specified architecture type
     if architecture_type == "TorusAE":
         torus_ae = ricci_regularization.Architectures.TorusAE(x_dim=input_dim, h_dim1=512, h_dim2=256, z_dim=latent_dim)
@@ -226,3 +229,41 @@ def get_dataloaders_tuned_nn(Path_experiment_json:str, additional_path = ''):
         "json_config" : json_config
     }
     return dict
+
+
+def get_dataset_and_encoding_from_dataloader(dataloader, encoder, input_dim):
+    """
+    Extracts and returns the input data, latent encodings from the encoder,
+    and associated labels from a given dataloader.
+
+    Args:
+        dataloader (torch.utils.data.DataLoader): Batch iterator over (data, labels).
+        encoder (nn.Module): Encoder network that projects inputs to latent space.
+        input_dim (int): Flattened dimensionality of input (e.g., 784 for MNIST).
+
+    Returns:
+        dict: {
+            "input_dataset": Raw input data tensor of shape [N, input_dim],
+            "AE_latent_encoding": Latent encodings (detached),
+            "labels": Corresponding labels (detached)
+        }
+    """
+    colorlist = []
+    enc_list = []
+    input_dataset_list = []
+
+    for (data, labels) in tqdm( dataloader, position=0 ):
+        input_dataset_list.append(data)
+        enc_list.append(encoder(data.view(-1, input_dim)))
+        colorlist.append(labels) 
+
+    input_dataset = torch.cat(input_dataset_list).reshape(-1, input_dim)
+    encoded_points = torch.cat(enc_list)
+    encoded_points_no_grad = encoded_points.detach()
+    color_array = torch.cat(colorlist).detach()
+    results = {
+        "input_dataset": input_dataset,
+        "AE_latent_encoding": encoded_points_no_grad,
+        "labels": color_array
+    }
+    return results
