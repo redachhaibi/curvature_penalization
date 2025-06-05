@@ -70,13 +70,13 @@ python3 -m venv .venv_ricci
 sudo apt install python3-venv
 if needed)
 
-3. Activate virtual environment
+2. Activate virtual environment
 
 ```bash
 source .venv_ricci/bin/activate
 ```
 
-4. Upgrade pip, wheel and setuptools 
+3. Upgrade pip, wheel and setuptools 
 
 ```bash
 pip install --upgrade pip
@@ -84,26 +84,26 @@ pip install --upgrade setuptools
 pip install wheel
 ```
 
-5. Install PyTorch with CUDA supprt
+4. Install PyTorch with CUDA supprt
 
 ```bash
 pip install torch torchvision torchaudio
 ```
 
-6. In order to use Jupyter with this virtual environment .venv
+5. In order to use Jupyter with this virtual environment .venv
 ```bash
 pip install ipykernel
 python -m ipykernel install --user --name=.venv_ricci
 ```
 (see https://janakiev.com/blog/jupyter-virtual-envs/ for details)
 
-7. Install the `ricci_regularization` package.
+6. Install the `ricci_regularization` package.
 
 ```bash
 python setup.py develop
 ```
 
-8. Additionnal packages which could be removed in ulterior versions
+7. Additionnal packages which could be removed in ulterior versions
 ```bash
 pip install stochman geomstats
 ```
