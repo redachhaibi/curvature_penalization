@@ -74,6 +74,38 @@ def compute_contractive_loss(data,torus_ae, training_config):
     return torch.nn.ReLU()( outlyers_encoder_jac_norm ).max()
 
 def compute_curvature_loss(data, torus_ae, training_config):
+    """
+    Computes the curvature loss for a batch of data using the Torus Autoencoder.
+
+    This function computes a curvature loss on encoded points either from the data 
+    or from uniformly sampled out-of-distribution (OOD) points in the latent space. 
+    The curvature can be computed using either forward-mode Jacobian (`jacfwd`) or 
+    finite differences (`fd`), depending on the configuration.
+
+    Args:
+        data (torch.Tensor): Input batch of data to encode.
+        torus_ae (nn.Module): Trained Torus Autoencoder model containing encoder and decoder.
+        training_config (dict): Dictionary containing training settings, including:
+            - "training_mode": dict with keys:
+                - "uniform_OOD_sampling_flag" (bool, optional): If True, computes curvature
+                  on uniform latent samples (sampled uniformly on the torus latent space) 
+                  instead of encoded data. Defaults to False.
+                - "curvature_computation_mode" (str): Either "jacfwd" or "fd".
+            - "OOD_settings": dict with key "n_OOD" specifying number of OOD points (if used).
+            - "architecture": dict with key "latent_dim" specifying latent space dimension.
+            - "loss_settings": dict with key "eps" for regularization in curvature computation.
+
+    Returns:
+        torch.Tensor or dict: Curvature loss. Returns either a scalar tensor (if `jacfwd`) 
+        or a dictionary with key "Curvature" (if `fd`).
+    
+    Notes:
+        - If `uniform_OOD_sampling_flag` is True, curvature is computed on uniformly sampled 
+          points in [-π, π]^d latent space.
+        - If False, curvature is computed on encoded data points from the input batch.
+        - The function supports two modes of curvature computation: forward-mode Jacobian (`jacfwd`) 
+          and finite differences (`fd`).
+    """
     try:
         uniform_OOD_sampling_flag  = training_config["training_mode"]["uniform_OOD_sampling_flag"]
     except KeyError:
@@ -102,7 +134,55 @@ def compute_curvature_loss(data, torus_ae, training_config):
         )
     return curvature_loss
 
+# this is only needed for the diagnostic mode
 def compute_all_losses_for_diagnostic(data, torus_ae, training_config):
+    """
+    Computes a suite of diagnostic losses for a batch of data using a Torus Autoencoder.
+
+    This function evaluates various geometric and contractive properties of the 
+    autoencoder on either encoded data points or uniformly sampled points in the latent space. 
+    The diagnostics include scalar curvature, metric determinant, inverse metric norms, 
+    Jacobian norms of the decoder, and encoder contractive loss.
+
+    Args:
+        data (torch.Tensor): Input batch of data.
+        torus_ae (nn.Module): Trained Torus Autoencoder model containing encoder and decoder.
+        training_config (dict): Dictionary containing training and loss settings, including:
+            - "training_mode": dict with keys:
+                - "uniform_OOD_sampling_flag" (bool): If True, uses uniformly sampled latent points.
+                - "compute_curvature" (bool): If True, computes scalar curvature and related metrics.
+            - "OOD_settings": dict with key "n_OOD" for number of OOD points (if used).
+            - "architecture": dict with keys:
+                - "latent_dim": Dimension of the latent space.
+                - "input_dim": Input dimension of the data.
+            - "loss_settings": dict with keys:
+                - "eps": Regularization parameter for metric inversion.
+                - "delta_encoder": Threshold for encoder contractive loss.
+
+    Returns:
+        dict: A dictionary of diagnostic losses, including:
+            - "curv_squared_mean": Mean squared scalar curvature.
+            - "curv_squared_max": Maximum squared scalar curvature.
+            - "Curvature": Curvature loss weighted by the metric volume element.
+            - "g_inv_norm_mean": Mean Frobenius norm of the inverse metric.
+            - "g_inv_norm_max": Maximum Frobenius norm of the inverse metric.
+            - "g_det_mean": Mean determinant of the metric.
+            - "g_det_max": Maximum determinant of the metric.
+            - "g_det_min": Minimum determinant of the metric.
+            - "decoder_jac_norm_mean": Mean trace of decoder Jacobian (metric).
+            - "decoder_jac_norm_max": Maximum trace of decoder Jacobian.
+            - "decoder_contractive_loss": Contractive loss of the decoder (ReLU of Jacobian trace).
+            - "Contractive": Contractive loss of the encoder (ReLU of outliers beyond delta_encoder).
+            - "encoder_jac_norm_mean": Mean norm of encoder Jacobian.
+            - "encoder_jac_norm_max": Maximum norm of encoder Jacobian.
+
+    Notes:
+        - If `uniform_OOD_sampling_flag` is True, curvature and metric computations 
+          are done on random points in [-π, π]^latent_dim instead of encoded data.
+        - The function uses `ricci_regularization` utilities for computing curvature, 
+          metrics, and Jacobian norms efficiently via `vmap`.
+        - Contractive losses use ReLU to penalize only violations beyond the set thresholds.
+    """
     dict_losses_diagnostic = {}
     
     # choose points for curvature penalization
@@ -116,13 +196,15 @@ def compute_all_losses_for_diagnostic(data, torus_ae, training_config):
 
     # compute curvature loss if needed: Sc is scalar curvature, g is metric
     if training_config["training_mode"]["compute_curvature"] == True:
-        Sc_on_data, g_on_data = ricci_regularization.Sc_g_jacfwd_vmap(
+        
+        R_on_data, g_on_data = ricci_regularization.curvature_loss_jacfwd(
                 encoded_points_to_compute_curvature,
                 function=torus_ae.decoder_torus,
-                eps=training_config["loss_settings"]["eps"]
+                eps=training_config["loss_settings"]["eps"],
+                reduction="Curvature_metric"
             )
-        dict_losses_diagnostic["curv_squared_mean"] = torch.square(Sc_on_data.detach()).mean()
-        dict_losses_diagnostic["curv_squared_max"] = torch.square(Sc_on_data.detach()).max()
+        dict_losses_diagnostic["curv_squared_mean"] = torch.square(R_on_data.detach()).mean()
+        dict_losses_diagnostic["curv_squared_max"] = torch.square(R_on_data.detach()).max()
     else:
         encoded_points_no_grad = torus_ae.encoder_to_lifting(data).detach()
         g_on_data = ricci_regularization.metric_jacfwd_vmap(
@@ -132,7 +214,7 @@ def compute_all_losses_for_diagnostic(data, torus_ae, training_config):
     
     # compute metric determinant and other losses
     det_g_on_data = torch.det(g_on_data)
-    dict_losses_diagnostic["Curvature"] = ( ( Sc_on_data**2 ) * torch.sqrt( det_g_on_data ) ).mean()    
+    dict_losses_diagnostic["Curvature"] = ( ( R_on_data**2 ) * torch.sqrt( det_g_on_data ) ).mean()    
     g_inv_train_batch = torch.linalg.inv(
         g_on_data + training_config["loss_settings"]["eps"] * torch.eye(
             training_config["architecture"]["latent_dim"]
@@ -241,8 +323,10 @@ def train(torus_ae, training_config, train_loader, optimizer,
         first_batch = first_batch.to(device)
         extreme_curv_points_tensor = torus_ae.encoder_to_lifting(first_batch.view(-1,training_config["architecture"]["input_dim"])[:training_config["OOD_settings"]["N_extr"]]).detach()
         extreme_curv_points_tensor.to(device)
-        extreme_curv_value_tensor,_ = ricci_regularization.Sc_g_jacfwd_vmap(extreme_curv_points_tensor, 
-                function=torus_ae.decoder_torus,eps=training_config["loss_settings"]["eps"])
+        extreme_curv_value_tensor,_ = ricci_regularization.curvature_loss_jacfwd(extreme_curv_points_tensor, 
+                function=torus_ae.decoder_torus,
+                eps=training_config["loss_settings"]["eps"],
+                reduction="Curvature_metric")
     
     for (data, labels) in t:
         data = data.to(device)

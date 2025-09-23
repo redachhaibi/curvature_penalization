@@ -56,7 +56,8 @@ def find_extreme_curvature_points(data_batch, extreme_curv_points_tensor,
     # Exrteme curvature batch
     new_curv_points_tensor = encoder(data_batch.view(-1,output_dim))
     new_curv_points_tensor = new_curv_points_tensor.detach()
-    new_curv_value_tensor,_ = ricci_regularization.Sc_g_jacfwd_vmap(new_curv_points_tensor, function = decoder)
+    new_curv_value_tensor,_ = ricci_regularization.curvature_loss_jacfwd(new_curv_points_tensor, function = decoder,
+                                                                         reduction="Curvature_metric")
     new_curv_value_tensor = new_curv_value_tensor.detach()
     
     # merge extreme points and new batch 

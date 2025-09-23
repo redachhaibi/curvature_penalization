@@ -3,24 +3,6 @@ import functools
 
 # notations have to be clearer use full names
 
-# Jacobian norm for contractive loss computation
-def Jacobian_norm_jacrev(input_tensor, function, input_dim):
-    """
-    Computes the norm of the Jacobian matrix of a function using reverse-mode autodiff (jacrev).
-
-    Parameters:
-    - input_tensor (torch.Tensor): The input tensor to the function.
-    - function (Callable): The function whose Jacobian is to be computed.
-    - input_dim (int): Dimensionality of the input space.
-
-    Returns:
-    - torch.Tensor: Scalar representing the norm of the Jacobian matrix.
-    """
-    input_tensor = input_tensor.reshape(-1,input_dim)
-    return torch.func.jacrev(function)(input_tensor).norm()
-
-Jacobian_norm_jacrev_vmap = torch.func.vmap(Jacobian_norm_jacrev)
-
 # Forward mode propagation via jacfwd
 
 def metric_jacfwd(u, function, latent_space_dim=2):
@@ -45,6 +27,7 @@ metric_jacfwd_vmap = torch.func.vmap(metric_jacfwd)
 
 # this function is auxiliary in computing metric and its derivatives later
 # as one needs to output both the result and its derivative simultanuousely 
+# not vectorized
 def aux_func_metric(x, function):
     """
     Auxiliary function used to return both the Riemannian metric and its value for use with jacfwd.
@@ -89,6 +72,7 @@ def Ch_g_g_inv_jacfwd (u, function, eps = 0.0):
               )
     return Ch, g, g_inv
 
+# not vectorized
 def aux_func(x,function, eps=0.0):
     """
     Auxiliary function to return Christoffel symbols and additional metric quantities for use in higher-order derivatives.
@@ -111,6 +95,7 @@ def curvature_loss_jacfwd (points, function, eps = 0.0, reduction = "mean"):
     """
     Computes the curvature loss based on the Riemann curvature tensor, Ricci tensor, and scalar curvature.
     Computation via forward propagation through jacfwd.
+    When reduction is "mean" consumes less memory (auxiliary tensors are deleted - better for training)
 
     Parameters:
     - points: The input points where the curvature loss is computed (typically the data or latent points).
@@ -120,20 +105,34 @@ def curvature_loss_jacfwd (points, function, eps = 0.0, reduction = "mean"):
 
     Returns:
     - If reduction is "mean": The mean curvature loss over the batch.
-    - If reduction is "dict": A dictionary containing the individual components used to compute the loss.
+    - If reduction is "Curvature_metric": Scalar curvature R and metric g on the batch.
+    - If reduction is "dict": A dictionary containing all the tensors used to compute the loss on the batch.
     """
     # compute Christoffel symbols and derivatives and inverse of metric
+    # vectorization via vmap
     dCh, (Ch, g, g_inv) = torch.func.vmap( torch.func.jacfwd(functools.partial( aux_func, function=function, eps=eps),
                             has_aux=True) )( points )
-    
-    Riemann = torch.einsum("biljk->bijkl",dCh) - torch.einsum("bikjl->bijkl",dCh)
-    Riemann += torch.einsum("bikp,bplj->bijkl", Ch, Ch) - torch.einsum("bilp,bpkj->bijkl", Ch, Ch)
-    
-    Ricci = torch.einsum("bcack->bak",Riemann)
-    R = torch.einsum('bak,bak->b',g_inv,Ricci)
-    if reduction == "mean":
-        return ( ( R**2 ) * torch.sqrt( torch.det(g) ) ).mean()
+    if reduction in ["mean", "Curvature_metric"]:
+        # for training
+        Riemann = torch.einsum("biljk->bijkl",dCh) - torch.einsum("bikjl->bijkl",dCh)
+        Riemann += torch.einsum("bikp,bplj->bijkl", Ch, Ch) - torch.einsum("bilp,bpkj->bijkl", Ch, Ch)
+        del Ch, dCh
+        
+        Ricci = torch.einsum("bcack->bak",Riemann)
+        del Riemann
+
+        R = torch.einsum('bak,bak->b',g_inv,Ricci)
+        del g_inv, Ricci
+        if reduction == "mean":
+            return ( ( R**2 ) * torch.sqrt( torch.det(g) ) ).mean()
+        elif reduction == "Curvature_metric":
+            return R, g
     elif reduction == "dict":
+        # for reports(inference)
+        Riemann = torch.einsum("biljk->bijkl",dCh) - torch.einsum("bikjl->bijkl",dCh)
+        Riemann += torch.einsum("bikp,bplj->bijkl", Ch, Ch) - torch.einsum("bilp,bpkj->bijkl", Ch, Ch)
+        Ricci = torch.einsum("bcack->bak",Riemann)
+        R = torch.einsum('bak,bak->b',g_inv,Ricci)
         dict = {
             "R": R,
             "g": g,
@@ -143,35 +142,6 @@ def curvature_loss_jacfwd (points, function, eps = 0.0, reduction = "mean"):
             "Ricci": Ricci
         }
         return dict
-
-# computation of Scalar curvature and metric
-# redundunt with curvature_loss_jacfwd has to be substituted in ipynb files and deprecated.
-def Sc_g_jacfwd (u, function, eps = 0.0):
-    """
-    Returns scalar curvature and metric, calls the domputation of the Riemann curvature tensor and Ricci tensor. 
-    Using forward-mode Jacobian derivatives.
-    
-    Parameters:
-    - u: The input points (typically data or latent points).
-    - function(decoder): The function (usually the decoder) whose gradient(Jacobian) defines the metric and curvature is being evaluated.
-    - eps: A small epsilon value used for regularization of the inverse of metric computation. (default is 0.0).
-
-    Returns:
-    - Sc: The scalar curvature computed from the Jacobian of the function at point u.
-    - g: The metric computed from the Jacobian of the function at point u.
-    """
-    # compute Christoffel symbols and derivatives and inverse of metric
-    dCh, (Ch, g, g_inv) = torch.func.jacfwd(functools.partial( aux_func, function=function, eps=eps),
-                            has_aux=True)( u )
-    
-    Riemann = torch.einsum("iljk->ijkl",dCh) - torch.einsum("ikjl->ijkl",dCh)
-    Riemann += torch.einsum("ikp,plj->ijkl", Ch, Ch) - torch.einsum("ilp,pkj->ijkl", Ch, Ch)
-    
-    Ricci = torch.einsum("cacb->ab",Riemann)
-    Sc = torch.einsum('ab,ab',g_inv,Ricci)
-    return Sc, g
-# vectorization
-Sc_g_jacfwd_vmap = torch.func.vmap(Sc_g_jacfwd)
 
 # ------------------------------------------
 # various custom embeddings (use instead of the 'decoder') used foe ground truth checks 
@@ -241,8 +211,26 @@ def my_fun_lobachevsky(u, c=0.01):
     return output
 
 
-
 # Bacward mode propagation via torch.func.jacrev 
+# Jacobian norm for contractive loss computation
+def Jacobian_norm_jacrev(input_tensor, function, input_dim):
+    """
+    Computes the norm of the Jacobian matrix of a function using reverse-mode autodiff (jacrev).
+
+    Parameters:
+    - input_tensor (torch.Tensor): The input tensor to the function.
+    - function (Callable): The function whose Jacobian is to be computed.
+    - input_dim (int): Dimensionality of the input space.
+
+    Returns:
+    - torch.Tensor: Scalar representing the norm of the Jacobian matrix.
+    """
+    input_tensor = input_tensor.reshape(-1,input_dim)
+    return torch.func.jacrev(function)(input_tensor).norm()
+# vectorization
+Jacobian_norm_jacrev_vmap = torch.func.vmap(Jacobian_norm_jacrev)
+
+
 # ------------------------------------------------
 # code below this line has to be rewritten as it contains recursive hell
 # however it is not used in curvature computation.

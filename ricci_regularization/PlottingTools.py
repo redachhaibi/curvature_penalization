@@ -30,97 +30,6 @@ def make_grid(numsteps,
     tgrid = tgrid.roll(1, 1)
     return tgrid
 
-def draw_frob_norm_tensor_on_grid(plot_name, tensor_on_grid, numsteps=100, xshift=0.0, yshift=0.0):
-    """
-    Visualize the Frobenius norm of a tensor defined on a 2D grid.
-
-    Parameters:
-    - plot_name: Title of the plot.
-    - tensor_on_grid: A tensor with shape (numsteps^2, d1, d2), where (d1, d2) are dimensions per grid point.
-    - numsteps: Number of steps (grid points) along each axis.
-    - xshift, yshift: Optional shifts to adjust axis labels.
-
-    Returns:
-    - A matplotlib plot displaying the Frobenius norm of the tensor on the grid.
-    """
-    
-    Frob_norm_on_grid = tensor_on_grid.norm(dim=(1,2)).view(numsteps, numsteps)
-    Frob_norm_on_grid = Frob_norm_on_grid[1:-1, 1:-1].detach()
-
-    fig, ax = plt.subplots()
-    im = ax.imshow(Frob_norm_on_grid, origin="lower")
-
-    cbar = ax.figure.colorbar(im)
-
-    ax.set_xticks((Frob_norm_on_grid.shape[0] - 1) * np.linspace(0, 1, num=11), 
-                  labels=(np.linspace(-1.5, 1.5, num=11) + xshift).round(1))
-    ax.set_yticks((Frob_norm_on_grid.shape[1] - 1) * np.linspace(0, 1, num=11), 
-                  labels=(np.linspace(-1.5, 1.5, num=11) + yshift).round(1))
-
-    plt.xlabel("x coordinate")
-    plt.ylabel("y coordinate")
-    plt.axis('scaled')
-
-    ax.set_title(plot_name)
-    fig.tight_layout()
-    plt.show()
-    
-    return plt
-
-def draw_scalar_on_grid(scalar_on_grid, plot_name="my_plot", 
-        xcenter=0.0, ycenter=0.0,
-        xsize=3.0, ysize=3.0,
-        xshift=0.0, yshift=0.0,
-        numsteps=100, numticks=5,
-        tick_decimals=2):
-    """
-    Visualize a scalar field on a 2D grid using a heatmap.
-
-    Parameters:
-    - scalar_on_grid: A 2D tensor representing scalar values on the grid.
-    - plot_name: Title of the plot.
-    - xcenter, ycenter: Center coordinates of the grid.
-    - xsize, ysize: Total width and height of the grid.
-    - xshift, yshift: Optional shifts to adjust axis labels.
-    - numsteps: Number of steps (grid points) along each axis.
-    - numticks: Number of tick marks on each axis.
-    - tick_decimals: Number of decimal places for tick labels.
-
-    Returns:
-    - A matplotlib plot displaying the scalar field as a heatmap.
-    """
-
-    scalar_on_grid = scalar_on_grid.detach()
-
-    fig, ax = plt.subplots()
-    im = ax.imshow(scalar_on_grid, origin="lower")
-
-    cbar = ax.figure.colorbar(im)
-
-    xticks = np.linspace(xcenter - 0.5 * xsize, xcenter + 0.5 * xsize, numticks)
-    yticks = np.linspace(ycenter - 0.5 * ysize, ycenter + 0.5 * ysize, numticks)
-
-    # Convert tick labels to strings with the specified decimal precision
-    xtick_labels = [f"{elem:.{tick_decimals}f}" for elem in (xticks + xshift).tolist()]
-    ytick_labels = [f"{elem:.{tick_decimals}f}" for elem in (yticks + yshift).tolist()]
-
-    ticks_places = np.linspace(0, 1, numticks) * (numsteps - 1)
-
-    ax.set_xticks(ticks_places, labels=xtick_labels)
-    ax.set_yticks(ticks_places, labels=ytick_labels)
-
-    plt.xlabel("x coordinate")
-    plt.ylabel("y coordinate")
-    plt.axis('scaled')
-
-    ax.set_title(plot_name)
-    fig.tight_layout()
-    plt.show()
-
-    return plt
-
-
-
 # plot recostructions for mnist dataset
 def plot_ae_outputs(test_dataset, encoder, decoder, n=10, D=784):
     """
@@ -220,17 +129,11 @@ def plot_ae_outputs_selected(test_dataset, encoder, decoder, targets=None, selec
 
     return ax
 
-
-def discrete_cmap_upd(N, base_cmap=None):
-    """Create an N-bin discrete colormap from the given base colormap."""
-    base = plt.get_cmap(base_cmap)
-    color_list = base(np.linspace(0, 1, N))
-    cmap = matplotlib.colors.ListedColormap(color_list[:N], name=f"{base.name}_{N}")
-    return cmap
-
-# borrowed from https://gist.github.com/jakevdp/91077b0cae40f8f8244a
 def discrete_cmap(N, base_cmap=None, bright_colors = False):
-    """Create an N-bin discrete colormap from the specified input map"""
+    """
+    Create an N-bin discrete colormap from the specified input map
+    borrowed from https://gist.github.com/jakevdp/91077b0cae40f8f8244a
+    """
 
     # Note that if base_cmap is a string or None, you can simply do
     #    return plt.cm.get_cmap(base_cmap, N)
@@ -468,6 +371,7 @@ def point_plot(encoder, data_loader, batch_idx, config,
         s=40, draw_grid=False, figsize=(9, 9)):
     """
     Plots the latent space representation of data points using an encoder.
+    Takes the dataloader (test or train) and plots the latent space.
     
     Parameters:
         encoder (nn.Module): The model that encodes the data.
@@ -522,7 +426,7 @@ def point_plot(encoder, data_loader, batch_idx, config,
     if dataset_name == "Swissroll":
         sc = ax.scatter(encoded_data_to_plot[:, 0], encoded_data_to_plot[:, 1], s=s, c=labels, alpha=1.0, 
                         marker='o', edgecolor='none', cmap=colormap)
-    elif dataset_name in ["MNIST01", "MNIST_subset", "MNIST"]:
+    elif dataset_name in ["MNIST_subset", "MNIST"]:
         k = len(selected_labels)
         norm = plt.Normalize(vmin=min(labels), vmax=max(labels))
         sc = ax.scatter(encoded_data_to_plot[:, 0], encoded_data_to_plot[:, 1], s=s, c=labels, alpha=1.0, 
@@ -554,6 +458,7 @@ def point_plot_fast(encoded_points, labels, batch_idx, config, show_title=True, 
                s=40, draw_grid=False, figsize=(9, 9), Saving_path=None):
     """
     A faster version of the point_plot function designed for plotting during training.
+    Takes the encoded points.
 
     Parameters:
         encoded_points (ndarray): Encoded data points to plot.
@@ -579,7 +484,7 @@ def point_plot_fast(encoded_points, labels, batch_idx, config, show_title=True, 
     if dataset_name == "Swissroll":
         sc = ax.scatter(encoded_points[:, 0], encoded_points[:, 1], s=s, c=labels, alpha=1.0, marker='o', 
                         edgecolor='none', cmap=colormap)
-    elif dataset_name in ["MNIST_subset", "MNIST01", "MNIST", "Synthetic"]:
+    elif dataset_name in ["MNIST_subset", "MNIST", "Synthetic"]:
         if config["dataset"]["name"] == "MNIST":
             selected_labels = torch.arange(10)
         elif config["dataset"]["name"] == "Synthetic":
@@ -621,8 +526,30 @@ def point_plot_fast(encoded_points, labels, batch_idx, config, show_title=True, 
     return fig
 
 
-def plot_2d_encoding(encoded_points, color_labels, cmap, opacity, save_plot=False, size_of_points = 40, verbose=True, 
+def plot_2d_encoding(encoded_points, color_labels, cmap, opacity, 
+                     save_plot=False, size_of_points = 40, verbose=True, 
                      Saving_file_name=None, Plot_title= None):
+    """
+    Plots a 2D scatter of encoded points with optional coloring, opacity, and saving.
+
+    This function is typically used to visualize the 2D latent space of an autoencoder or other 
+    dimensionality-reduced data. Each point can be colored according to its label or another variable.
+
+    Args:
+        encoded_points (torch.Tensor or np.ndarray): Tensor/array of shape [num_points, 2] containing 2D coordinates.
+        color_labels (torch.Tensor or np.ndarray): Values to color each point, same length as encoded_points.
+        cmap (str or matplotlib colormap): Colormap used for coloring points.
+        opacity (float): Alpha value for points (0 transparent - 1 opaque).
+        save_plot (bool, optional): If True, saves the plot to file. Defaults to False.
+        size_of_points (int, optional): Size of scatter points. Defaults to 40.
+        verbose (bool, optional): If True, displays the plot. If False, closes it. Defaults to True.
+        Saving_file_name (str, optional): File path to save the plot if save_plot=True. Defaults to None.
+        Plot_title (str, optional): Title of the plot. Defaults to None.
+
+    Notes:
+        - If save_plot=True and Saving_file_name is not provided, a warning is printed and the plot is not saved.
+        - Designed for 2D embeddings. For higher dimensions, reduce to 2D before plotting.
+    """
     plt.figure(figsize=(9,9),dpi=400)
     plt.rcParams.update({'font.size': 20}) # makes all fonts on the plot be 20
     plt.scatter( encoded_points[:,0], encoded_points[:,1], 
@@ -638,6 +565,72 @@ def plot_2d_encoding(encoded_points, color_labels, cmap, opacity, save_plot=Fals
             plt.savefig(Saving_file_name,bbox_inches='tight',format='pdf')
     if Plot_title != None:
         plt.title(Plot_title)
+    if verbose == True:
+        plt.show()
+    else:
+        plt.close()
+
+def plot_histogram(data,title,Path_pictures,
+                        filename="histogram.pdf",
+                        violent_saving=False, 
+                        percentile_bounds=(1, 99),
+                        bins=200,
+                        verbose=True):
+    """
+    Plot and save histogram of data, excluding outliers.
+
+    Parameters
+    ----------
+    data : array-like
+        Input data values.
+    title : str
+        Title of the plot.
+    Path_pictures : str
+        Directory path where the plot will be saved if violent_saving=True.
+    filename : str, default="histogram.pdf"
+        File name for saving the plot (only used if violent_saving=True).
+    violent_saving : bool, default=False
+        Whether to save the figure as a PDF.
+    percentile_bounds : tuple, default=(1, 99)
+        Lower and upper percentile bounds for filtering outliers.
+    bins : int, default=200
+        Number of histogram bins.
+    verbose: bool, default=True
+        Whether to show the plot.
+    """
+
+    # Define outlier limits using percentiles
+    lower_bound, upper_bound = np.percentile(data, percentile_bounds)
+
+    # Filter out outliers
+    filtered_data = data[(data >= lower_bound) & (data <= upper_bound)]
+
+    # Compute statistics
+    mean_value = torch.mean(data)
+    std_value = torch.std(data)
+
+    # Plot histogram
+    plt.figure(figsize=(5, 3), dpi=200)
+    plt.rcParams.update({'font.size': 10})
+    plt.title(title)
+
+    stats_text = (f"Mean: {mean_value:.8f}\n"
+                  f"Std: {std_value:.8f}")
+
+    plt.hist(filtered_data, bins=bins, density=True)
+
+    # Get updated axis limits *after* plotting
+    ax = plt.gca()
+    xlim, ylim = ax.get_xlim(), ax.get_ylim()
+
+    # Place stats text dynamically in top-right corner
+    ax.text(xlim[1] * 0.98, ylim[1] * 0.98, stats_text,
+            ha='right', va='top', fontsize=10,
+            bbox={"facecolor": "white", "alpha": 0.5, "edgecolor": "black"})
+
+    # Save figure if required
+    if violent_saving:
+        plt.savefig(f'{Path_pictures}/{filename}', bbox_inches='tight', format='pdf')
     if verbose == True:
         plt.show()
     else:

@@ -1,8 +1,6 @@
 import torch
-import math
-import ricci_regularization
-
-# f.d. on batches of rhombus minigrids
+# finite differences on batches of rhombus minigrids; 
+# ONLY for the case of latent dimension d=2
 
 def build_mini_grid_batch(centers: torch.Tensor, h: float) -> torch.Tensor:
     """
@@ -40,6 +38,28 @@ def build_mini_grid_batch(centers: torch.Tensor, h: float) -> torch.Tensor:
     return batch_minigrids
 
 def indices(minigrid_size=7):
+    """
+    Generates rhombus-shaped masks and indices for finite difference computations on a minigrid.
+
+    This function creates a rhombus mask within a square grid of size `minigrid_size x minigrid_size`
+    and computes indices corresponding to shifted positions (next/previous in x and y) and the 
+    central position of the rhombus. These indices are used for finite difference calculations of 
+    metrics, Christoffel symbols, and curvature on the minigrid.
+
+    With each differentiation minigrid size of intrest should decrease by two.
+    
+    Args:
+        minigrid_size (int, optional): The size of the square grid. Defaults to 7.
+
+    Returns:
+        tuple:
+            - mask (torch.BoolTensor): Boolean mask of the rhombus within the square grid.
+            - indices_x_next (torch.Tensor): Indices of rhombus points shifted +1 in x-direction.
+            - indices_x_prev (torch.Tensor): Indices of rhombus points shifted -1 in x-direction.
+            - indices_y_next (torch.Tensor): Indices of rhombus points shifted +1 in y-direction.
+            - indices_y_prev (torch.Tensor): Indices of rhombus points shifted -1 in y-direction.
+            - indices_central (torch.Tensor): Indices of rhombus points at the central position.
+    """
     # Step 0: Initialize a tensor of size minigrid_size x minigrid_size filled with -1.
     # This will be the grid where we'll fill in the rhombus shape.
     rhombus_tensor = -torch.ones((minigrid_size, minigrid_size), dtype=torch.int)
@@ -111,15 +131,20 @@ def indices(minigrid_size=7):
     return mask, indices_x_next, indices_x_prev, indices_y_next, indices_y_prev, indices_central
 
 
-def Sc_g_fd_batch_minigrids_rhombus (centers, function, h=0.01, eps = 0.0):
-    # input: 
-    # centers: torch.tensor are the batch of points in dimension d
-    # they are centers of rhombus minigrids inside 7 x 7 square grids 
-    # function: is the function through which we pullbac the euclidean metric, 
-    # typically a decoder
-    # h: float the step of the grid
-    # eps: float regularization parameter for computaion of the inverse of metric
-    
+def R_g_fd_batch_minigrids_rhombus (centers, function, h=0.01, eps = 0.0):
+    """    
+    Args:
+        centers (torch.Tensor): Tensor of shape [batch_size, d] representing the batch of points in d dimensions.
+        They are centers of rhombus minigrids inside 7 x 7 square grids 
+        function (callable): Function through which the Euclidean metric is pulled back (usually a decoder).
+        h (float, optional): Step size of the minigrid. Defaults to 0.01.
+        eps (float, optional): Regularization parameter added to the metric before inversion to ensure numerical stability. Defaults to 0.0.
+
+    Returns:
+        tuple:
+            - R (torch.Tensor): Tensor of shape [batch_size] containing the scalar curvature at each center.
+            - g (torch.Tensor): Tensor of shape [batch_size, d, d] containing the Riemannian metric at each center.
+    """
     d = centers.shape[-1]
     batch_size = centers.shape[0]
     # create a batch of minigrids with given centers and step h
@@ -206,161 +231,20 @@ def Sc_g_fd_batch_minigrids_rhombus (centers, function, h=0.01, eps = 0.0):
     # cutting the shape of the inverse of the metric. Only needed at one central point:
     g_inv = g_inv[:,indices_central].squeeze() # shape batch_size * d * d
     # b is batch_size s, r are local coordinates
-    Sc = torch.einsum('bsr,bsr->b',g_inv,Ricci)
+    R = torch.einsum('bsr,bsr->b',g_inv,Ricci)
     del Ricci, g_inv
-    return Sc, g
+    return R, g
 
 def curvature_loss_fd(points, function, h, eps):
-    # returns the curvature loss 
-    R, g = Sc_g_fd_batch_minigrids_rhombus(centers = points, function = function, h = h, eps=eps)
+    """
+    Args:
+        points (torch.Tensor): Tensor of shape [batch_size, d] representing points where the curvature is evaluated.
+        function (callable): Function (typically a decoder) used to pull back the Euclidean metric.
+        h (float): Step size for finite differences on the minigrid.
+        eps (float): Regularization parameter added to the metric before inversion.
+
+    Returns:
+        torch.Tensor: Scalar representing the curvature loss for the batch.
+    """
+    R, g = R_g_fd_batch_minigrids_rhombus(centers = points, function = function, h = h, eps=eps)
     return ( ( R**2 ) * torch.sqrt( torch.det(g) ) ).mean()
-
-
-# ---------------------------------------------
-# Code below this line is old and slow
-# Uniform grids ( suboptimal with recurrence)
-# Grid covering the whole latent space
-def make_grid_fd(numsteps, xlim_left = -torch.pi, xlim_right = torch.pi,
-              ylim_bottom = -torch.pi, ylim_top = torch.pi):
-    xs = torch.linspace(xlim_left, xlim_right, steps = numsteps)
-    ys = torch.linspace(ylim_bottom, ylim_top, steps = numsteps)
-
-    tgrid = torch.cartesian_prod(ys, xs)
-    tgrid = tgrid.roll(1,1)
-    return tgrid
-
-
-#metric on a grid which is the pull-back of a Euclidean metric by 'function'
-def metric_fd_grid(grid, function):
-    numsteps = int(math.sqrt(grid.shape[0]))
-    
-    hx = float(abs((grid[numsteps**2 - 1] - grid[0])[0]))/(numsteps - 1)
-    hy = float(abs((grid[numsteps**2 - 1] - grid[0])[1]))/(numsteps - 1)
-    
-    latent = grid
-    #latent = latent.to(device)
-    psi = function(latent)
-    psi_next_x =  psi.roll(-1,0)
-    psi_prev_x =  psi.roll(1,0)
-    psi_next_y =  psi.roll(-numsteps,0)
-    psi_prev_y =  psi.roll(numsteps,0)
-    
-    dpsidx = (psi_next_x - psi_prev_x)/(2*hx)
-    dpsidy = (psi_next_y - psi_prev_y)/(2*hy)
-
-    E = torch.func.vmap(torch.dot)(dpsidx, dpsidx)
-    F = torch.func.vmap(torch.dot)(dpsidx, dpsidy)
-    G = torch.func.vmap(torch.dot)(dpsidy, dpsidy)
-    
-    metric = torch.cat((E.unsqueeze(0), F.unsqueeze(0), F.unsqueeze(0), G.unsqueeze(0)),0)
-    metric = metric.view(4, numsteps*numsteps)
-    metric = metric.transpose(0, 1)
-    metric = metric.view(numsteps*numsteps, 2, 2)
-    return metric
-
-def diff_by_x(tensor_on_grid, h):
-    tensor_next_x =  tensor_on_grid.roll(-1,0)
-    tensor_prev_x =  tensor_on_grid.roll(1,0)
-    tensor_dx = (tensor_next_x - tensor_prev_x)/(2*h)
-    return tensor_dx
-
-def diff_by_y(tensor, numsteps, h):
-    psi = tensor
-    psi_next_y =  psi.roll(-numsteps,0)
-    psi_prev_y =  psi.roll(numsteps,0)
-    dpsidy = (psi_next_y - psi_prev_y)/(2*h)
-    return dpsidy
-
-def metric_der_fd_grid(grid, function):
-    h = (grid[1] - grid[0]).norm()
-    numsteps = int(math.sqrt(grid.shape[0]))
-    metric = ricci_regularization.metric_fd_grid(grid, 
-                    function = function)
-    dg_dx_fd = diff_by_x(metric, h=h)
-    dg_dy_fd = diff_by_y(metric, numsteps=numsteps, h = h)
-    dg = torch.cat((dg_dx_fd.unsqueeze(-1), dg_dy_fd.unsqueeze(-1)), dim = -1)
-    return dg
-
-def metric_inv_fd(u, function, eps=0.0):
-    g = metric_fd_grid(u,function)
-    d = g.shape[-1]
-    device = g.device
-    g_inv = torch.inverse(g + eps*torch.eye(d,device=device))
-    return g_inv
-
-#metric_inv_jacfd_vmap = torch.func.vmap(metric_inv_fd)
-
-def Ch_fd (u, function, eps = 0.0):
-    g_inv = metric_inv_fd(u,function,eps=eps)
-    dg = metric_der_fd_grid(u,function)
-    Ch = 0.5*(torch.einsum('bim,bmkl->bikl',g_inv,dg)+
-              torch.einsum('bim,bmlk->bikl',g_inv,dg)-
-              torch.einsum('bim,bklm->bikl',g_inv,dg)
-              )
-    return Ch
-#Ch_fd_vmap = torch.func.vmap(Ch_fd)
-
-def Ch_der_fd (grid, function, eps=0.0):
-    h = (grid[1] - grid[0]).norm() # =size/numsteps
-    numsteps = int(math.sqrt(grid.shape[0]))
-    Ch = Ch_fd(grid, function=function, eps=eps)
-    dChdx = diff_by_x(Ch, h)
-    dChdy = diff_by_y(Ch, numsteps=numsteps, h = h)
-    dCh = torch.cat((dChdx.unsqueeze(-1), dChdy.unsqueeze(-1)), dim = -1)
-    return dCh
-
-
-# Riemann curvature tensor (3,1)
-def Riem_fd(u, function,eps=0.0):
-    Ch = Ch_fd(u, function, eps=eps)
-    Ch_der = Ch_der_fd(u, function, eps=eps)
-
-    Riem = torch.einsum("biljk->bijkl",Ch_der) - torch.einsum("bikjl->bijkl",Ch_der)
-    Riem += torch.einsum("bikp,bplj->bijkl", Ch, Ch) - torch.einsum("bilp,bpkj->bijkl", Ch, Ch)
-    return Riem
-
-def Ric_fd(u, function, eps=0.0):
-    Riemann = Riem_fd(u, function, eps=eps)
-    Ric = torch.einsum("bcscr->bsr",Riemann)
-    return Ric
-
-def Sc_fd (u, function, eps = 0.0):
-    Ricci = Ric_fd(u, function=function,eps=eps)
-    metric_inv = metric_inv_fd(u,function=function, eps=eps)
-    Sc = torch.einsum('bsr,bsr->b',metric_inv,Ricci)
-    return Sc
-
-def error_fd_jacfwd_on_grid(tensor_fd, tensor_jacfwd, cut = 1):
-    
-    numsteps = int( math.sqrt(tensor_jacfwd.shape[0]) )
-    #finite differences
-    tensor_fd = tensor_fd.reshape(numsteps, numsteps, -1)
-    tensor_fd_on_grid_no_borders = tensor_fd[cut:-cut,cut:-cut]
-
-    # Jacfwd
-    tensor_jacfwd = tensor_jacfwd.reshape(numsteps, numsteps, - 1)
-    tensor_jacfwd_on_grid_no_borders = tensor_jacfwd[cut:-cut,cut:-cut]
-
-    error = torch.functional.F.mse_loss(tensor_fd_on_grid_no_borders, tensor_jacfwd_on_grid_no_borders)
-    return error
-
-# old style
-# compute the grid of metric
-# 'cut' defines number of grid layers cut from the border 
-def compute_error_metric_on_grid(numsteps, function, cut = 1):
-    tgrid = make_grid_fd(numsteps)
-
-    #finite differences
-    with torch.no_grad():
-        metric = metric_fd_grid(tgrid, function)
-    metric = metric.reshape(numsteps, numsteps, - 1)
-    metric_fd_on_grid_no_borders = metric[cut:-cut,cut:-cut]
-
-    # Jacfwd
-    metric_jacfwd_on_grid = ricci_regularization.metric_jacfwd_vmap(tgrid, function = function)
-    metric_jacfwd_on_grid_no_borders = metric_jacfwd_on_grid.reshape(numsteps, numsteps, - 1)[1:-1,1:-1]
-
-    #error = (metric_fd_on_grid_no_borders - metric_jacfwd_on_grid_no_borders).norm()**2 /(4 * numsteps**2)
-    error = torch.functional.F.mse_loss(metric_jacfwd_on_grid_no_borders, metric_fd_on_grid_no_borders)
-    #print("L2 norm of error:", error)
-    return error

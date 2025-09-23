@@ -7,7 +7,37 @@ import sklearn
 import ricci_regularization
 from tqdm.notebook import tqdm
 
+
 def get_dataloaders(dataset_config: dict, data_loader_config: dict, dtype: str, datasets_root = None):
+    """
+    Creates and returns training and testing data loaders for different datasets.
+
+    Supported datasets:
+      - MNIST (full dataset)
+      - MNIST_subset (random subset with user-specified labels and samples per label)
+      - Synthetic (custom synthetic dataset from ricci_regularization.SyntheticDataset)
+      - Swissroll (synthetic dataset generated using sklearn's make_swiss_roll)
+
+    Args:
+        dataset_config (dict): Configuration dictionary for the dataset, may include:
+            - "name": dataset name ("MNIST", "MNIST_subset", "Synthetic", "Swissroll")
+            - dataset-specific parameters (e.g., selected_labels, num_points_per_label, n, k, d, etc.)
+        data_loader_config (dict): Configuration dictionary for the dataloaders, must include:
+            - "batch_size": batch size for the dataloaders
+            - "split_ratio": fraction of data to use for testing
+            - "random_seed": random seed for reproducibility
+            - "random_shuffling": whether to shuffle training data
+        dtype (str): Torch dtype for tensors (e.g., torch.float32, torch.float64).
+        datasets_root (str, optional): Root directory for storing/loading datasets. 
+                                       Defaults to "../../datasets/".
+
+    Returns:
+        dict: A dictionary containing:
+            - "train_loader": DataLoader for the training set
+            - "test_loader": DataLoader for the testing set
+            - "test_dataset": The full test dataset (or split, depending on dataset type)
+            - "test_dataset_partial": (only for MNIST, MNIST_subset) partial test set
+    """
     if datasets_root == None:
         datasets_root = '../../datasets/'  # Root directory for datasets
 
@@ -24,7 +54,7 @@ def get_dataloaders(dataset_config: dict, data_loader_config: dict, dtype: str, 
         dataset = datasets.MNIST(root=datasets_root, train=True, transform=transform, download=True)
         test_dataset  = datasets.MNIST(root=datasets_root, train=False, transform=transform, download=False)
 
-    elif dataset_config["name"] in ["MNIST_subset","MNIST01"]:
+    elif dataset_config["name"] == "MNIST_subset":
         # Load the full MNIST dataset
         train_dataset = torchvision.datasets.MNIST(root=datasets_root, train=True, transform=transform, download=True)
         test_dataset  = torchvision.datasets.MNIST(root=datasets_root, train=False, transform=transform, download=False)
@@ -79,7 +109,7 @@ def get_dataloaders(dataset_config: dict, data_loader_config: dict, dtype: str, 
         "train_loader": train_loader,
         "test_loader": test_loader
     }
-    if dataset_config["name"] in ["MNIST01","MNIST","MNIST_subset"]:
+    if dataset_config["name"] in ["MNIST","MNIST_subset"]:
         loaders["test_dataset"] = test_dataset
         loaders["test_dataset_partial"] = test_data
     else:
@@ -87,8 +117,34 @@ def get_dataloaders(dataset_config: dict, data_loader_config: dict, dtype: str, 
     return loaders
 
 
+# This function returns the initialized and loaded model  and the path to the model weights.
+# It is used to build reports after training when one whants to load the weights of a pre6trained AE.
 def get_tuned_nn(config: dict, additional_path = '', verbose = True):
-    # this function returns the initialized and loaded model  and the path to the model weights
+    """
+    Initialize and load a pre-trained neural network model with weights.
+
+    This function constructs a neural network architecture (currently supports 
+    TorusAE and TorusConvAE), loads its pre-trained weights from disk, 
+    moves it to GPU if available, and sets it to evaluation mode.
+
+    Args:
+        config (dict): Configuration dictionary with the following keys:
+            - "architecture": dict containing:
+                - "latent_dim": latent space dimension
+                - "input_dim": input dimension
+                - "type" (optional): architecture type, either "TorusAE" or "TorusConvAE".
+                                    Defaults to "TorusAE" if not specified.
+            - "experiment": dict containing:
+                - "name": name of the experiment (used to locate saved weights)
+        additional_path (str, optional): Additional prefix path for locating the weights.
+                                         Defaults to ''.
+        verbose (bool, optional): If True, prints the chosen architecture. Defaults to True.
+
+    Returns:
+        tuple:
+            - torch.nn.Module: The initialized model with loaded weights (in eval mode).
+            - str: Path to the loaded model weights.
+    """
     latent_dim = config["architecture"]["latent_dim"]
     input_dim  = config["architecture"]["input_dim"]
 
@@ -120,150 +176,3 @@ def get_tuned_nn(config: dict, additional_path = '', verbose = True):
     torus_ae.eval()
     
     return torus_ae, PATH_ae_wights
-
-
-# this is very oldstyle. to be deprecated soon
-def get_dataloaders_tuned_nn(Path_experiment_json:str, additional_path = ''):
-    """
-    Loads dataset, splits it into training and testing sets, creates DataLoaders, sets up a VAE architecture, 
-    loads pre-trained weights, and returns a dictionary containing the DataLoaders, the tuned VAE, and the configuration.
-
-    Parameters:
-    Path_experiment_json (str): Path to the JSON configuration file.
-    additional_path (str, optional): Additional path to the pre-trained weights.
-
-    Returns:
-    dict: A dictionary with the training DataLoader, testing DataLoader, the tuned AE model, and the configuration.
-    """
-
-    with open(Path_experiment_json) as json_file:
-        json_config = json.load(json_file)
-
-    Path_experiments = json_config["Path_experiments"]
-    experiment_name = json_config["experiment_name"]
-    experiment_number = json_config["experiment_number"]
-    Path_pictures = json_config["Path_pictures"]
-    dataset_name    = json_config["dataset"]["name"]
-    split_ratio = json_config["optimization_parameters"]["split_ratio"]
-    batch_size  = json_config["optimization_parameters"]["batch_size"]
-    datasets_root = '../../datasets/'
-    # Dataset uploading 
-
-   
-    if dataset_name == "MNIST":
-        #MNIST_SIZE = 28
-        # MNIST Dataset
-        D = 784
-        train_dataset = datasets.MNIST(root=datasets_root, train=True, transform=transforms.ToTensor(), download=True)
-        test_dataset  = datasets.MNIST(root=datasets_root, train=False, transform=transforms.ToTensor(), download=False)
-    elif dataset_name == "MNIST01":
-        D = 784
-        full_mnist_dataset = datasets.MNIST(root=datasets_root, train=True, transform=transforms.ToTensor(), download=True)
-        test_dataset  = datasets.MNIST(root=datasets_root, train=False, transform=transforms.ToTensor(), download=False)
-        #indices01 = torch.where((full_mnist_dataset.targets == 0) | (full_mnist_dataset.targets == 1))[0]
-        mask = (full_mnist_dataset.targets == -1) 
-        selected_labels = json_config["dataset"]["selected_labels"]
-        for label in selected_labels:
-            mask = mask | (full_mnist_dataset.targets == label)
-        indices01 = torch.where(mask)[0]
-        train_dataset = Subset(full_mnist_dataset, indices01) # MNIST only with 0,1 indices
-
-    elif dataset_name == "Synthetic":
-        k = json_config["dataset"]["parameters"]["k"]
-        n = json_config["dataset"]["parameters"]["n"]
-        d = json_config["architecture"]["latent_dim"]
-        D = json_config["architecture"]["input_dim"]
-        shift_class = json_config["dataset"]["parameters"]["shift_class"]
-        interclass_variance = json_config["dataset"]["parameters"]["interclass_variance"]
-        variance_of_classes = json_config["dataset"]["parameters"]["variance_of_classes"]
-        # Generate dataset
-        # via classes
-        torch.manual_seed(0) # reproducibility
-        my_dataset = ricci_regularization.SyntheticDataset(k=k,n=n,d=d,D=D,
-                                            shift_class=shift_class, interclass_variance=interclass_variance, variance_of_classes=variance_of_classes)
-
-        train_dataset = my_dataset.create
-    elif dataset_name == "Swissroll":
-        swissroll_noise = json_config["dataset"]["parameters"]["swissroll_noise"]
-        sr_numpoints = json_config["dataset"]["parameters"]["sr_numpoints"]
-
-        D = 3
-        train_dataset =  sklearn.datasets.make_swiss_roll(n_samples=sr_numpoints, noise=swissroll_noise)
-        sr_points = torch.from_numpy(train_dataset[0]).to(torch.float32)
-        #sr_points = torch.cat((sr_points,torch.zeros(sr_numpoints,D-3)),dim=1)
-        sr_colors = torch.from_numpy(train_dataset[1]).to(torch.float32)
-        from torch.utils.data import TensorDataset
-        train_dataset = TensorDataset(sr_points,sr_colors)
-
-    m = len(train_dataset)
-    train_data, test_data = torch.utils.data.random_split(train_dataset, [m-int(m*split_ratio), int(m*split_ratio)])
-
-    test_loader  = torch.utils.data.DataLoader(test_data , batch_size=batch_size)
-    train_loader = torch.utils.data.DataLoader(train_data, batch_size=batch_size, shuffle=True)
-    # AE structure
-    latent_dim = json_config["architecture"]["latent_dim"]
-    input_dim  = json_config["architecture"]["input_dim"]
-    try:
-        architecture_type = json_config["architecture"]["name"]
-    except KeyError:
-        architecture_type = "TorusAE"
-    if architecture_type== "TorusAE":
-        torus_ae   = ricci_regularization.Architectures.TorusAE(x_dim=input_dim, h_dim1= 512, h_dim2=256, z_dim=latent_dim)
-    elif architecture_type =="TorusConvAE":
-        torus_ae   = ricci_regularization.Architectures.TorusConvAE(x_dim=input_dim, h_dim1= 512, h_dim2=256, z_dim=latent_dim,pixels=28)
-    if torch.cuda.is_available():
-        torus_ae.cuda()
-
-    #PATH_ae_wights = "../" + json_config["weights_saved_at"]
-    try:
-        PATH_ae_wights = additional_path + json_config["weights_saved_at"]
-    except KeyError:
-        PATH_ae_wights = additional_path + json_config["weights_file"]
-    torus_ae.load_state_dict(torch.load(PATH_ae_wights))
-    torus_ae.eval()
-    
-    dict = {
-        "train_loader" : train_loader,
-        "test_loader" : test_loader,
-        "tuned_neural_network": torus_ae,
-        "json_config" : json_config
-    }
-    return dict
-
-
-def get_dataset_and_encoding_from_dataloader(dataloader, encoder, input_dim):
-    """
-    Extracts and returns the input data, latent encodings from the encoder,
-    and associated labels from a given dataloader.
-
-    Args:
-        dataloader (torch.utils.data.DataLoader): Batch iterator over (data, labels).
-        encoder (nn.Module): Encoder network that projects inputs to latent space.
-        input_dim (int): Flattened dimensionality of input (e.g., 784 for MNIST).
-
-    Returns:
-        dict: {
-            "input_dataset": Raw input data tensor of shape [N, input_dim],
-            "AE_latent_encoding": Latent encodings (detached),
-            "labels": Corresponding labels (detached)
-        }
-    """
-    colorlist = []
-    enc_list = []
-    input_dataset_list = []
-
-    for (data, labels) in tqdm( dataloader, position=0 ):
-        input_dataset_list.append(data)
-        enc_list.append(encoder(data.view(-1, input_dim)))
-        colorlist.append(labels) 
-
-    input_dataset = torch.cat(input_dataset_list).reshape(-1, input_dim)
-    encoded_points = torch.cat(enc_list)
-    encoded_points_no_grad = encoded_points.detach()
-    color_array = torch.cat(colorlist).detach()
-    results = {
-        "input_dataset": input_dataset,
-        "AE_latent_encoding": encoded_points_no_grad,
-        "labels": color_array
-    }
-    return results

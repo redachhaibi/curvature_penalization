@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 
+# the fully-connected Autoencoder used in the experiments with Synthetic Gaussians, Swissroll and MNIST datasets 
 class TorusAE(nn.Module):
     def __init__(self, x_dim, h_dim1, h_dim2, z_dim, dtype = torch.float32):
         super(TorusAE, self).__init__()
@@ -67,6 +68,8 @@ class TorusAE(nn.Module):
         z = self.encoder(x.view(-1, self.x_dim))
         return self.decoder(z), z
 
+
+# Convolutional AE(not used in the experiments, but can provide faster training on MNIST) 
 class TorusConvAE(nn.Module):
     def __init__(self, x_dim, h_dim1, h_dim2, z_dim, pixels):
         super(TorusConvAE, self).__init__()
