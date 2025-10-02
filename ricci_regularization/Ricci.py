@@ -1,98 +1,289 @@
 import torch
 import functools
+from typing import Callable, Dict, Tuple, Union, Optional
 
-# notations have to be clearer use full names
-
-# Forward mode propagation via jacfwd
-
-def metric_jacfwd(u, function, latent_space_dim=2):
+class RicciCurvature:
     """
-    Computes the Riemannian metric (pullback metric) induced by a function (e.g., decoder) using forward-mode autodiff.
-
-    Parameters:
-    - u (torch.Tensor): Input point(s) of shape (latent_space_dim,) or batch of points.
-    - function (Callable): Function (typically decoder) whose Jacobian defines the metric.
-    - latent_space_dim (int): Dimensionality of the latent space (default=2).
-
-    Returns:
-    - torch.Tensor: The Riemannian metric (symmetric positive semi-definite matrix) at the input point.
+    A class for computing Riemannian curvature quantities using automatic differentiation.
+    
+    This class provides both forward-mode (jacfwd) and backward-mode (jacrev) differentiation
+    options for computing Riemannian metrics, Christoffel symbols, and curvature tensors.
     """
-    u = u.reshape(-1,latent_space_dim)
-    jac = torch.func.jacfwd(function)(u)
-    jac = jac.reshape(-1,latent_space_dim)
-    metric = torch.matmul(jac.T,jac)
-    return metric
+    
+    def __init__(self, 
+                 latent_space_dim: int = 2,
+                 autodiff_mode: str = "forward",
+                 eps: float = 0.0,
+                 device: Optional[torch.device] = None):
+        """
+        Initialize the RicciCurvature calculator.
+        
+        Parameters:
+        - latent_space_dim (int): Dimensionality of the latent space (default=2)
+        - autodiff_mode (str): Either "forward" or "backward" for jacfwd or jacrev (default="forward")
+        - eps (float): Regularization parameter for metric inversion (default=0.0)
+        - device (torch.device): Device to perform computations on (default=None, uses input tensor device)
+        """
+        self.latent_space_dim = latent_space_dim
+        self.autodiff_mode = autodiff_mode.lower()
+        self.eps = eps
+        self.device = device
+        
+        if self.autodiff_mode not in ["forward", "backward"]:
+            raise ValueError("autodiff_mode must be either 'forward' or 'backward'")
+            
+        # Set the jacobian function based on mode
+        self.jac_func = torch.func.jacfwd if self.autodiff_mode == "forward" else torch.func.jacrev
+        
+        # Create vectorized versions
+        self._metric_vmap = torch.func.vmap(self._compute_metric_single)
+        self._christoffel_vmap = torch.func.vmap(self._compute_christoffel_single)
+    
+    def _compute_metric_single(self, point: torch.Tensor, function: Callable) -> torch.Tensor:
+        """
+        Compute the Riemannian metric (pullback metric) for a single point.
+        
+        Parameters:
+        - point (torch.Tensor): Input point of shape (latent_space_dim,)
+        - function (Callable): Function whose Jacobian defines the metric
+        
+        Returns:
+        - torch.Tensor: The Riemannian metric tensor
+        """
+        point = point.reshape(-1, self.latent_space_dim)
+        jac = self.jac_func(function)(point)
+        jac = jac.reshape(-1, self.latent_space_dim)
+        metric = torch.matmul(jac.T, jac)
+        return metric
+    
+    def compute_metric(self, point: torch.Tensor, function: Callable) -> torch.Tensor:
+        """
+        Compute the Riemannian metric for single or batch of points.
+        
+        Parameters:
+        - point (torch.Tensor): Input point(s) of shape (latent_space_dim,) or (batch_size, latent_space_dim)
+        - function (Callable): Function whose Jacobian defines the metric
+        
+        Returns:
+        - torch.Tensor: The Riemannian metric tensor(s)
+        """
+        if point.dim() == 1:
+            return self._compute_metric_single(point, function)
+        else:
+            return self._metric_vmap(point, function)
+    
+    def _aux_func_metric(self, x: torch.Tensor, function: Callable) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Auxiliary function to return both metric and its value for use with has_aux=True.
+        
+        Parameters:
+        - x (torch.Tensor): Input tensor
+        - function (Callable): Function to compute the metric
+        
+        Returns:
+        - Tuple[torch.Tensor, torch.Tensor]: (metric, metric) for has_aux compatibility
+        """
+        g = self._compute_metric_single(x, function)
+        return g, g
+    
+    def _compute_christoffel_single(self, point: torch.Tensor, function: Callable) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        Compute Christoffel symbols, metric tensor, and inverse metric for a single point.
+        
+        Parameters:
+        - point (torch.Tensor): Input point where geometric quantities are evaluated
+        - function (Callable): Function inducing the Riemannian metric
+        
+        Returns:
+        - Tuple[torch.Tensor, torch.Tensor, torch.Tensor]: (Christoffel symbols, metric, inverse metric)
+        """
+        # Compute metric and its derivatives
+        dg, g = self.jac_func(
+            functools.partial(self._aux_func_metric, function=function),
+            has_aux=True
+        )(point)
+        
+        # Compute inverse of metric with regularization
+        d = g.shape[0]
+        device = g.device if self.device is None else self.device
+        g_inv = torch.inverse(g + self.eps * torch.eye(d, device=device))
+        
+        # Compute Christoffel symbols
+        Ch = 0.5 * (
+            torch.einsum('im,mkl->ikl', g_inv, dg) +
+            torch.einsum('im,mlk->ikl', g_inv, dg) -
+            torch.einsum('im,klm->ikl', g_inv, dg)
+        )
+        
+        return Ch, g, g_inv
+    
+    def compute_christoffel(self, point: torch.Tensor, function: Callable) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        Compute Christoffel symbols for single or batch of points.
+        
+        Parameters:
+        - point (torch.Tensor): Input point(s)
+        - function (Callable): Function inducing the Riemannian metric
+        
+        Returns:
+        - Tuple[torch.Tensor, torch.Tensor, torch.Tensor]: (Christoffel symbols, metric, inverse metric)
+        """
+        if point.dim() == 1:
+            return self._compute_christoffel_single(point, function)
+        else:
+            return self._christoffel_vmap(point, function)
+    
+    def _aux_func_christoffel(self, x: torch.Tensor, function: Callable) -> Tuple[torch.Tensor, Tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
+        """
+        Auxiliary function to return Christoffel symbols and additional quantities for higher-order derivatives.
+        
+        Parameters:
+        - x (torch.Tensor): Input tensor
+        - function (Callable): Function to compute Christoffel symbols
+        
+        Returns:
+        - Tuple[torch.Tensor, Tuple[torch.Tensor, torch.Tensor, torch.Tensor]]: 
+          (Christoffel symbols, (Christoffel symbols, metric, inverse metric))
+        """
+        Ch, g, g_inv = self._compute_christoffel_single(x, function)
+        return Ch, (Ch, g, g_inv)
+    
+    def compute_curvature_loss(self, 
+                             points: torch.Tensor, 
+                             function: Callable, 
+                             reduction: str = "mean") -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor], Dict[str, torch.Tensor]]:
+        """
+        Compute the curvature loss based on Riemann curvature tensor, Ricci tensor, and scalar curvature.
+        
+        Parameters:
+        - points (torch.Tensor): Input points where curvature loss is computed
+        - function (Callable): Function whose curvature is being evaluated
+        - reduction (str): How to reduce the computed loss. Options:
+            - "mean": Returns mean curvature loss (memory efficient for training)
+            - "curvature_metric": Returns scalar curvature R and metric g
+            - "dict": Returns dictionary with all computed tensors
+            
+        Returns:
+        - Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor], Dict[str, torch.Tensor]]:
+          Depending on reduction mode
+        """
+        # Compute Christoffel symbols and derivatives using vmap
+        christoffel_vmap = torch.func.vmap(
+            self.jac_func(functools.partial(self._aux_func_christoffel, function=function), has_aux=True)
+        )
+        dCh, (Ch, g, g_inv) = christoffel_vmap(points)
+        
+        if reduction in ["mean", "curvature_metric"]:
+            # Memory-efficient computation for training
+            Riemann = (torch.einsum("biljk->bijkl", dCh) - 
+                      torch.einsum("bikjl->bijkl", dCh))
+            Riemann += (torch.einsum("bikp,bplj->bijkl", Ch, Ch) - 
+                       torch.einsum("bilp,bpkj->bijkl", Ch, Ch))
+            
+            # Clean up intermediate tensors for memory efficiency
+            del Ch, dCh
+            
+            Ricci = torch.einsum("bcack->bak", Riemann)
+            del Riemann
+            
+            R = torch.einsum('bak,bak->b', g_inv, Ricci)
+            del g_inv, Ricci
+            
+            if reduction == "mean":
+                return ((R**2) * torch.sqrt(torch.det(g))).mean()
+            elif reduction == "curvature_metric":
+                return R, g
+                
+        elif reduction == "dict":
+            # Full computation for analysis/reports
+            Riemann = (torch.einsum("biljk->bijkl", dCh) - 
+                      torch.einsum("bikjl->bijkl", dCh))
+            Riemann += (torch.einsum("bikp,bplj->bijkl", Ch, Ch) - 
+                       torch.einsum("bilp,bpkj->bijkl", Ch, Ch))
+            
+            Ricci = torch.einsum("bcack->bak", Riemann)
+            R = torch.einsum('bak,bak->b', g_inv, Ricci)
+            
+            return {
+                "R": R,
+                "g": g,
+                "g_inv": g_inv,
+                "Ch": Ch,
+                "dCh": dCh,
+                "Ricci": Ricci,
+                "Riemann": Riemann
+            }
+        else:
+            raise ValueError(f"Unknown reduction mode: {reduction}. Use 'mean', 'curvature_metric', or 'dict'")
+    
+    def compute_jacobian_norm(self, input_tensor: torch.Tensor, function: Callable) -> torch.Tensor:
+        """
+        Compute the norm of the Jacobian matrix of a function.
+        
+        Parameters:
+        - input_tensor (torch.Tensor): Input tensor to the function
+        - function (Callable): Function whose Jacobian norm is computed
+        
+        Returns:
+        - torch.Tensor: Scalar representing the norm of the Jacobian matrix
+        """
+        input_tensor = input_tensor.reshape(-1, self.latent_space_dim)
+        return self.jac_func(function)(input_tensor).norm()
+    
+    def compute_jacobian_norm_batch(self, input_tensor: torch.Tensor, function: Callable) -> torch.Tensor:
+        """
+        Compute Jacobian norms for a batch of points.
+        
+        Parameters:
+        - input_tensor (torch.Tensor): Batch of input tensors
+        - function (Callable): Function whose Jacobian norms are computed
+        
+        Returns:
+        - torch.Tensor: Batch of Jacobian norms
+        """
+        return torch.func.vmap(self.compute_jacobian_norm)(input_tensor, function)
+    
+    def set_autodiff_mode(self, mode: str):
+        """
+        Change the autodiff mode.
+        
+        Parameters:
+        - mode (str): Either "forward" or "backward"
+        """
+        if mode.lower() not in ["forward", "backward"]:
+            raise ValueError("Mode must be either 'forward' or 'backward'")
+        
+        self.autodiff_mode = mode.lower()
+        self.jac_func = torch.func.jacfwd if self.autodiff_mode == "forward" else torch.func.jacrev
+        
+        # Recreate vectorized functions with new mode
+        self._metric_vmap = torch.func.vmap(self._compute_metric_single)
+        self._christoffel_vmap = torch.func.vmap(self._compute_christoffel_single)
+    
+    def set_regularization(self, eps: float):
+        """
+        Set the regularization parameter for metric inversion.
+        
+        Parameters:
+        - eps (float): Regularization parameter
+        """
+        self.eps = eps
 
-metric_jacfwd_vmap = torch.func.vmap(metric_jacfwd)
 
-# this function is auxiliary in computing metric and its derivatives later
-# as one needs to output both the result and its derivative simultanuousely 
-# not vectorized
-def aux_func_metric(x, function):
+# Legacy function wrappers for backward compatibility
+def metric_jacfwd(point, function, latent_space_dim=2):
+    """Legacy wrapper for forward-mode metric computation."""
+    calculator = RicciCurvature(latent_space_dim=latent_space_dim, autodiff_mode="forward")
+    return calculator.compute_metric(point, function)
+
+def metric_jacrev(point, function, latent_space_dim=2):
+    """Legacy wrapper for backward-mode metric computation."""
+    calculator = RicciCurvature(latent_space_dim=latent_space_dim, autodiff_mode="backward")
+    return calculator.compute_metric(point, function)
+
+def curvature_loss_jacfwd(points, function, eps=0.0, reduction="mean"):
     """
-    Auxiliary function used to return both the Riemannian metric and its value for use with jacfwd.
-
-    Parameters:
-    - x (torch.Tensor): Input tensor.
-    - function (Callable): Function (typically decoder) to compute the metric.
-
-    Returns:
-    - Tuple[torch.Tensor, torch.Tensor]: The metric tensor and a copy (for use with `has_aux=True` in `jacfwd`).
-    """
-    g = metric_jacfwd( x, function=function)
-    return g, g
-
-# this also not vectorized
-def Ch_g_g_inv_jacfwd (u, function, eps = 0.0):
-    """
-    Computes Christoffel symbols, metric tensor, and inverse metric using forward-mode autodiff.
-
-    Parameters:
-    - u (torch.Tensor): Input point where the geometric quantities are evaluated.
-    - function (Callable): Function (typically decoder) inducing the Riemannian metric.
-    - eps (float): Small value added to the diagonal for numerical stability (default=0.0).
-
-    Returns:
-    - Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        - Christoffel symbols: tensor of shape (dim, dim, dim)
-        - Metric tensor: shape (dim, dim)
-        - Inverse metric tensor: shape (dim, dim)
-    """
-    # compute metric and its derivatives at a batch of points
-    dg, g = torch.func.jacfwd( functools.partial(aux_func_metric, function=function),
-                         has_aux=True)( u )
-    # compute inverse of metric with some regularization param eps    
-    d = g.shape[0]
-    device = g.device
-    g_inv = torch.inverse(g + eps*torch.eye(d,device=device))
-    # compute Christoffel symbols
-    Ch = 0.5*(torch.einsum('im,mkl->ikl',g_inv,dg)+
-              torch.einsum('im,mlk->ikl',g_inv,dg)-
-              torch.einsum('im,klm->ikl',g_inv,dg)
-              )
-    return Ch, g, g_inv
-
-# not vectorized
-def aux_func(x,function, eps=0.0):
-    """
-    Auxiliary function to return Christoffel symbols and additional metric quantities for use in higher-order derivatives.
-
-    Parameters:
-    - x (torch.Tensor): Input tensor.
-    - function (Callable): Decoder or similar function.
-    - eps (float): Regularization parameter for metric inversion (default=0.0).
-
-    Returns:
-    - Tuple[torch.Tensor, Tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
-        - Christoffel symbols,
-        - Tuple of (Christoffel symbols, metric, inverse metric).
-    """
-    Ch, g, g_inv = Ch_g_g_inv_jacfwd( x, function=function, eps=eps)
-    return Ch, (Ch, g, g_inv)
-
-# computing the loss
-def curvature_loss_jacfwd (points, function, eps = 0.0, reduction = "mean"):
-    """
+    Legacy wrapper for forward-mode curvature loss computation.
     Computes the curvature loss based on the Riemann curvature tensor, Ricci tensor, and scalar curvature.
     Computation via forward propagation through jacfwd.
     When reduction is "mean" consumes less memory (auxiliary tensors are deleted - better for training)
@@ -108,40 +299,25 @@ def curvature_loss_jacfwd (points, function, eps = 0.0, reduction = "mean"):
     - If reduction is "Curvature_metric": Scalar curvature R and metric g on the batch.
     - If reduction is "dict": A dictionary containing all the tensors used to compute the loss on the batch.
     """
-    # compute Christoffel symbols and derivatives and inverse of metric
-    # vectorization via vmap
-    dCh, (Ch, g, g_inv) = torch.func.vmap( torch.func.jacfwd(functools.partial( aux_func, function=function, eps=eps),
-                            has_aux=True) )( points )
-    if reduction in ["mean", "Curvature_metric"]:
-        # for training
-        Riemann = torch.einsum("biljk->bijkl",dCh) - torch.einsum("bikjl->bijkl",dCh)
-        Riemann += torch.einsum("bikp,bplj->bijkl", Ch, Ch) - torch.einsum("bilp,bpkj->bijkl", Ch, Ch)
-        del Ch, dCh
-        
-        Ricci = torch.einsum("bcack->bak",Riemann)
-        del Riemann
+    calculator = RicciCurvature(autodiff_mode="forward", eps=eps)
+    return calculator.compute_curvature_loss(points, function, reduction)
 
-        R = torch.einsum('bak,bak->b',g_inv,Ricci)
-        del g_inv, Ricci
-        if reduction == "mean":
-            return ( ( R**2 ) * torch.sqrt( torch.det(g) ) ).mean()
-        elif reduction == "Curvature_metric":
-            return R, g
-    elif reduction == "dict":
-        # for reports(inference)
-        Riemann = torch.einsum("biljk->bijkl",dCh) - torch.einsum("bikjl->bijkl",dCh)
-        Riemann += torch.einsum("bikp,bplj->bijkl", Ch, Ch) - torch.einsum("bilp,bpkj->bijkl", Ch, Ch)
-        Ricci = torch.einsum("bcack->bak",Riemann)
-        R = torch.einsum('bak,bak->b',g_inv,Ricci)
-        dict = {
-            "R": R,
-            "g": g,
-            "g_inv": g_inv,
-            "Ch": Ch,
-            "dCh": dCh,
-            "Ricci": Ricci
-        }
-        return dict
+def curvature_loss_jacrev(points, function, eps=0.0, reduction="mean"):
+    """Legacy wrapper for backward-mode curvature loss computation."""
+    calculator = RicciCurvature(autodiff_mode="backward", eps=eps)
+    return calculator.compute_curvature_loss(points, function, reduction)
+
+# Vectorized versions for backward compatibility
+metric_jacfwd_vmap = torch.func.vmap(metric_jacfwd)
+metric_jacrev_vmap = torch.func.vmap(metric_jacrev)
+
+def Jacobian_norm_jacrev(input_tensor, function, input_dim):
+    """Legacy wrapper for Jacobian norm computation."""
+    calculator = RicciCurvature(latent_space_dim=input_dim, autodiff_mode="backward")
+    return calculator.compute_jacobian_norm(input_tensor, function)
+
+Jacobian_norm_jacrev_vmap = torch.func.vmap(Jacobian_norm_jacrev)
+
 
 # ------------------------------------------
 # various custom embeddings (use instead of the 'decoder') used foe ground truth checks 
@@ -209,98 +385,3 @@ def my_fun_lobachevsky(u, c=0.01):
     output = torch.cat((output.unsqueeze(0),torch.zeros(781).unsqueeze(0)),dim=1)
     output = output.flatten()
     return output
-
-
-# Bacward mode propagation via torch.func.jacrev 
-# Jacobian norm for contractive loss computation
-def Jacobian_norm_jacrev(input_tensor, function, input_dim):
-    """
-    Computes the norm of the Jacobian matrix of a function using reverse-mode autodiff (jacrev).
-
-    Parameters:
-    - input_tensor (torch.Tensor): The input tensor to the function.
-    - function (Callable): The function whose Jacobian is to be computed.
-    - input_dim (int): Dimensionality of the input space.
-
-    Returns:
-    - torch.Tensor: Scalar representing the norm of the Jacobian matrix.
-    """
-    input_tensor = input_tensor.reshape(-1,input_dim)
-    return torch.func.jacrev(function)(input_tensor).norm()
-# vectorization
-Jacobian_norm_jacrev_vmap = torch.func.vmap(Jacobian_norm_jacrev)
-
-
-# ------------------------------------------------
-# code below this line has to be rewritten as it contains recursive hell
-# however it is not used in curvature computation.
-"""
-def metric_jacrev(u, function):
-    jac = torch.func.jacrev(function)(u).squeeze()
-    # squeezing is needed to get rid of 1-dimentions
-    metric = torch.matmul(jac.T,jac)
-    return metric
-
-"""
-def metric_jacrev(u, function, latent_space_dim=2):
-    u = u.reshape(-1,latent_space_dim)
-    jac = torch.func.jacrev(function)(u)
-    jac = jac.reshape(-1,latent_space_dim)
-    metric = torch.matmul(jac.T,jac)
-    return metric
-
-
-metric_jacrev_vmap = torch.func.vmap(metric_jacrev)
-
-def metric_der_jacrev (u, function):
-    metric = functools.partial(metric_jacrev, function=function)
-    dg = torch.func.jacrev(metric)(u).squeeze()
-    # squeezing is needed to get rid of 1-dimentions 
-    # occuring when using torch.func.jacrev
-    return dg
-metric_der_jacrev_vmap = torch.func.vmap(metric_der_jacrev)
-
-def Ch_jacrev (u, function):
-    g = metric_jacrev(u,function)
-    g_inv = torch.inverse(g)
-    dg = metric_der_jacrev(u,function)
-    Ch = 0.5*(torch.einsum('im,mkl->ikl',g_inv,dg)+
-              torch.einsum('im,mlk->ikl',g_inv,dg)-
-              torch.einsum('im,klm->ikl',g_inv,dg)
-              )
-    return Ch
-Ch_jacrev_vmap = torch.func.vmap(Ch_jacrev)
-
-def Ch_der_jacrev (u, function):
-    Ch = functools.partial(Ch_jacrev, function=function)
-    dCh = torch.func.jacrev(Ch)(u).squeeze()
-    return dCh
-
-Ch_der_jacrev_vmap = torch.func.vmap(Ch_der_jacrev)
-
-# Riemann curvature tensor (3,1)
-def Riem_jacrev(u, function):
-    Ch = Ch_jacrev(u, function)
-    Ch_der = Ch_der_jacrev(u, function)
-
-    Riem = torch.einsum("iljk->ijkl",Ch_der) - torch.einsum("ikjl->ijkl",Ch_der)
-    Riem += torch.einsum("ikp,plj->ijkl", Ch, Ch) - torch.einsum("ilp,pkj->ijkl", Ch, Ch)
-    return Riem
-
-def Ric_jacrev(u, function):
-    Riemann = Riem_jacrev(u, function)
-    Ric = torch.einsum("cacb->ab",Riemann)
-    return Ric
-
-Ric_jacrev_vmap = torch.func.vmap(Ric_jacrev)
-
-def Sc_jacrev (u, function):
-    metric = metric_jacrev(u, function=function)
-    Ricci = Ric_jacrev(u, function=function)
-    metric_inv = torch.inverse(metric)
-    Sc = torch.einsum('ab,ab',metric_inv,Ricci)
-    return Sc
-Sc_jacrev_vmap = torch.func.vmap(Sc_jacrev)
-
-
-    
