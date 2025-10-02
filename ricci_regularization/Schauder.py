@@ -2,6 +2,7 @@
 from tqdm                  import tqdm
 import torch, math
 import numpy as np
+import ricci_regularization
 
 # Mathematical source for both Haar and Schauder(-Faber) bases: https://en.wikipedia.org/wiki/Haar_wavelet
 # Numpy implementation of Haar wavelet generation on [0,1]
@@ -101,8 +102,8 @@ class NumericalGeodesics():
         N_max = 2**n_max    # Number of basis elements in Schauder basis is N_max = 2**n_max + 1 ; After throwing the first basis vectors N_max = 2**n_max
         self.schauder_bases["shooting"] = { "basis": basis, "N_max": N_max}
 
-
-    def computeGeodesicInterpolation(self, generator, m1, m2, epochs, optimizer_info, display_info) :
+    # this function can be deprecated. one can always use the vectorized version
+    def computeGeodesicInterpolation(self, generator, m1, m2, epochs, optimizer_info, display_info, device = "cuda") :
         """
             generator     : Function taking latent variables and generating a sample. Its gradient encodes the metric tensor.
             m1, m2        : Initial and destination point
@@ -113,12 +114,17 @@ class NumericalGeodesics():
         """
         N_max = self.schauder_bases["zero_boundary"]["N_max"]
         basis = self.schauder_bases["zero_boundary"]["basis"]
+        basis = basis.to(device)
         # Dimension
         dim   = m1.shape[0]
         # parameters = Coefficients of (base+fiber) curve in Schauder basis
-        parameters   = torch.zeros( (N_max, dim) , requires_grad=True)
+        parameters   = torch.zeros( (N_max, dim) , requires_grad=True, device=device)
         # Define linear interpolating curve == naive geodesic
         linear_curve = torch.ones( self.step_count, 1)*m1 + self.time_grid.view( self.step_count, 1)*(m2-m1)
+        linear_curve = linear_curve.to(device)
+
+        m1 = m1.to(device)
+        m2 = m2.to(device)
 
         # Initialization
         curve  = linear_curve
@@ -147,4 +153,54 @@ class NumericalGeodesics():
         #
         # Recompute curve with optimal parameters
         geodesic_curve = linear_curve + torch.mm( basis, parameters )
-        return linear_curve.detach().numpy(), geodesic_curve.detach().numpy()
+        return linear_curve.cpu().detach().numpy(), geodesic_curve.cpu().detach().numpy()
+    
+    #same but parallelized for batches of points
+    def computeGeodesicInterpolationBatch(self, generator, m1_batch, m2_batch, epochs, optimizer_info, display_info, 
+                                          device = "cuda"):
+        """
+        Compute geodesics for a batch of start and end points.
+
+        m1_batch, m2_batch : torch.Tensor of shape (batch_size, dim)
+        """
+        N_max = self.schauder_bases["zero_boundary"]["N_max"]
+        basis = self.schauder_bases["zero_boundary"]["basis"]  # (step_count, N_max)
+        basis = basis.to(device)
+        if len(m1_batch.shape) == 1:
+            m1_batch = m1_batch.unsqueeze(0)
+            m2_batch = m2_batch.unsqueeze(0)
+        step_count = self.step_count
+        batch_size, dim = m1_batch.shape
+
+        # parameters for each batch, requires grad
+        parameters = torch.zeros((batch_size, N_max, dim), requires_grad=True, device=device)
+
+        # Linear curves for each batch: shape (batch_size, step_count, dim)
+        linear_curves = m1_batch[:, None, :] + (m2_batch - m1_batch)[:, None, :] * self.time_grid.view(step_count, 1)
+        linear_curves = linear_curves.to(device)
+
+        optimizer_class = getattr(torch.optim, optimizer_info["name"])
+        optimizer = optimizer_class([{'params': parameters}], **optimizer_info["args"])
+
+        with tqdm(range(epochs)) as t:
+            for epoch in t:
+                # Compute curve: linear_curve + basis @ parameters
+                # basis shape: (step_count, N_max), parameters: (batch_size, N_max, dim)
+                # -> output: (batch_size, step_count, dim)
+                curve = linear_curves + torch.einsum('sn,bnd->bsd', basis, parameters)
+
+                # Generated outputs: assume generator works on batch (batch_size, step_count, dim)
+            
+                # Finite difference along time axis
+                energy = ricci_regularization.compute_energy(curve=curve, decoder=generator, reduction="mean")
+
+                optimizer.zero_grad()
+                energy.backward(retain_graph=True)
+                grad_norm = parameters.grad.norm()
+                t.set_description(f"{display_info}. Energy {energy.item():.6f}, Grad {grad_norm.item():.6f}")
+                optimizer.step()
+
+        # Recompute geodesic curves after optimization
+        geodesic_curves = linear_curves + torch.einsum('sn,bnd->bsd', basis, parameters)
+
+        return linear_curves.cpu().detach().squeeze().numpy(), geodesic_curves.cpu().detach().squeeze().numpy()

@@ -23,7 +23,7 @@ def initialize_centers(encoded_points, num_clusters, num_data_points):
     #print(f"Initialized centers:\num_data_points {centers}")
     return centers
 
-def construct_interpolation_points_on_segments_connecting_centers2encoded_data(starting_points, final_points, num_aux_points, cut_off_ends = True):
+def construct_linear_segments(starting_points, final_points, num_aux_points, cut_off_ends = True):
     """
     Connect every point in `starting_points` to every point in `final_points` with intermediate points.
 
@@ -59,38 +59,6 @@ def construct_interpolation_points_on_segments_connecting_centers2encoded_data(s
         interpolation_points = geodesic_curve
     return interpolation_points
 
-def geodesics_from_parameters_interpolation_points(parameters_of_geodesics, end_points):
-    """
-    Constructs geodesics from parameters of the geodesics and end points.
-    This function simply adds end points to intermediate points.
-
-    Parameters:
-    - parameters_of_geodesics (torch.Tensor): Interpolation parameters with shape 
-      (num_starting_points, num_clusters, num_interpolation_points, latent_dim).
-    - end_points (list of torch.Tensor): [starting_points, final_points], where:
-      - starting_points: Shape (num_starting_points, latent_dim).
-      - final_points: Shape (num_clusters, latent_dim).
-
-    Returns:
-    - torch.Tensor: Complete geodesics with shape 
-      (num_starting_points, num_clusters, num_interpolation_points + 2, latent_dim).
-    """
-    # reading the shapes of the parameters
-    num_starting_points, num_clusters, num_interpolation_points, latent_dim = parameters_of_geodesics.shape
-    starting_points, final_points = end_points
-    # starting_points are usually encoded data
-    # final_points are usually cluster centroids  
-
-    #expand starting_points
-    starting_points_expanded = starting_points.unsqueeze(1).unsqueeze(2) # Shape: (num_starting_points, 1, 1, latent_dim)
-    starting_points_expanded = starting_points_expanded.expand(num_starting_points, num_clusters , 1, latent_dim)
-    #expand final_points
-    final_points_expanded = final_points.unsqueeze(0).unsqueeze(2)  # Shape: (1, num_clusters, 1, latent_dim)
-    final_points_expanded = final_points_expanded.expand(num_starting_points, num_clusters , 1, latent_dim)
-    # concatenate the starting points, the interpolation_points and final_points  along the dimention associated interpolation_points
-    geodesic_curve = torch.cat((starting_points_expanded, parameters_of_geodesics, final_points_expanded),dim=2) 
-    return geodesic_curve
-
 def construct_shortest_linear_segments_connecting(starting_points, final_points, num_aux_points):
     # Check that the final dimensions of inputs match
     if starting_points.shape[-1] != final_points.shape[-1] or final_points.shape[-1] != starting_points.shape[-1]:
@@ -113,13 +81,13 @@ def construct_shortest_linear_segments_connecting(starting_points, final_points,
     geodesic_curve_recentered = (1 - t) * starting_points_recentered + final_points_expanded 
     return geodesic_curve_recentered
 
-def geodesics_from_parameters_schauder(geodesic_solver, parameters_of_geodesics, end_points, periodicity_mode = True):
+def geodesics_from_parameters(parameters_of_geodesics, end_points, mode = "Schauder", basis = None, periodicity_mode = True):
     """
-    Constructs geodesic curves using Schauder basis representation.
+    If mode=="Schauder", constructs geodesic curves using coefficients of Schauder basis representation as optimization parameters.
+    If mode=="Interpolation_points": constructs geodesics using interpolation points as optimization parameters.
 
     Parameters:
-    geodesic_solver: NumericalGeodesics
-        A solver used to compute geodesics numerically.
+    basis: Schauder basis (only for mode=="Schauder")
     parameters_of_geodesics: torch.Tensor
         Coefficients representing geodesic curves in the Schauder basis.
         Shape: (num_starting_points, num_final_points, num_basis_functions, dim).
@@ -132,49 +100,65 @@ def geodesics_from_parameters_schauder(geodesic_solver, parameters_of_geodesics,
     geodesic_curve: torch.Tensor
         The computed geodesic curves, shape (num_starting_points, num_final_points, step_count, dim).
     """
-    parameters = parameters_of_geodesics
-    starting_points, final_points = end_points
-    
-    basis = geodesic_solver.schauder_bases["zero_boundary"]["basis"]
-    step_count = basis.shape[0]
 
-    if periodicity_mode == True:
-        linear_curve = construct_shortest_linear_segments_connecting(
-            starting_points=starting_points, 
-            final_points=final_points,
-            num_aux_points=step_count
-        )
-    else:
-        linear_curve = construct_interpolation_points_on_segments_connecting_centers2encoded_data(
-            starting_points=starting_points, 
-            final_points=final_points,
-            num_aux_points=step_count, 
-            cut_off_ends=False)
-    
-    geodesic_curve = linear_curve + torch.einsum("sn,bend->besd", basis, parameters)
+    starting_points, final_points = end_points
+    if mode == "Schauder":
+        if basis is None:
+            raise TypeError("Basis must be provided")
+        parameters = parameters_of_geodesics    
+        step_count = basis.shape[0]
+
+        if periodicity_mode == True:
+            linear_curve = construct_shortest_linear_segments_connecting(
+                starting_points=starting_points, 
+                final_points=final_points,
+                num_aux_points=step_count
+            )
+        else:
+            linear_curve = construct_linear_segments(
+                starting_points=starting_points, 
+                final_points=final_points,
+                num_aux_points=step_count, 
+                cut_off_ends=False)
+        
+        geodesic_curve = linear_curve + torch.einsum("sn,bend->besd", basis, parameters)
+    elif mode == "Interpolation_points":
+        """
+        In this case the function simply adds end points to intermediate points(which are the movable optimization parameters).
+
+        Parameters:
+        - parameters_of_geodesics (torch.Tensor): Interpolation parameters with shape 
+        (num_starting_points, num_clusters, num_interpolation_points, latent_dim).
+        - end_points (list of torch.Tensor): [starting_points, final_points], where:
+        - starting_points: Shape (num_starting_points, latent_dim).
+        - final_points: Shape (num_clusters, latent_dim).
+
+        Returns:
+        - torch.Tensor: Complete geodesics with shape 
+        (num_starting_points, num_clusters, num_interpolation_points + 2, latent_dim).
+        """
+        # reading the shapes of the parameters
+        num_starting_points, num_clusters, num_interpolation_points, latent_dim = parameters_of_geodesics.shape
+        # starting_points are usually encoded data
+        # final_points are usually cluster centroids  
+        #expand starting_points
+        starting_points_expanded = starting_points.unsqueeze(1).unsqueeze(2) # Shape: (num_starting_points, 1, 1, latent_dim)
+        starting_points_expanded = starting_points_expanded.expand(num_starting_points, num_clusters , 1, latent_dim)
+        #expand final_points
+        final_points_expanded = final_points.unsqueeze(0).unsqueeze(2)  # Shape: (1, num_clusters, 1, latent_dim)
+        final_points_expanded = final_points_expanded.expand(num_starting_points, num_clusters , 1, latent_dim)
+        # concatenate the starting points, the interpolation_points and final_points  along the dimention associated interpolation_points
+        geodesic_curve = torch.cat((starting_points_expanded, parameters_of_geodesics, final_points_expanded),dim=2) 
     return geodesic_curve
 
-def compute_energy(mode, parameters_of_geodesics, end_points, decoder, geodesic_solver=None, 
-                   reduction = "mean", device = "cuda", periodicity_mode = True):
+def compute_energy(curve, decoder, reduction = "mean"):
     """
-    Computes the energy of geodesic curves using finite differences.
+    Computes the energy of a geodesic curve using finite differences.
 
     Parameters:
-    mode: str
-        Determines the method used to compute geodesics. Options:
-        - "Interpolation_points": Uses interpolation-based geodesics.
-        - "Schauder": Uses Schauder basis representation for geodesics.
-    parameters_of_geodesics: torch.Tensor
-        Coefficients or parameters defining the geodesic curves.
-        - Shape depends on the chosen mode.
-    end_points: tuple
-        A tuple containing:
-        - starting_points (torch.Tensor): Initial points of geodesics.
-        - final_points (torch.Tensor): Final points of geodesics.
+    curve: torch.Tensor of shape [batch_size,step_count,dimension]
     decoder: callable, optional (default=torus_ae.decoder_torus)
         A function that decodes geodesic curves from their latent representation.
-    geodesic_solver: NumericalGeodesics
-        A solver used to compute geodesics numerically.
     reduction: 'sum', 'none'
 
     Returns:
@@ -182,18 +166,13 @@ def compute_energy(mode, parameters_of_geodesics, end_points, decoder, geodesic_
         The total energy of the geodesic curves, computed as the sum of squared differences
         between consecutive points in the decoded geodesic curves.
     """
-    if mode == "Interpolation_points":
-        geodesic_curve = geodesics_from_parameters_interpolation_points(parameters_of_geodesics, end_points)
-    elif mode == "Schauder":
-        geodesic_curve = geodesics_from_parameters_schauder(geodesic_solver, parameters_of_geodesics, end_points, 
-                                                            periodicity_mode=periodicity_mode)
-    geodesic_curve = geodesic_curve.to(device) # shape (N,K,step_count,d)
     # define step count (number of interpolation points on the geodesic)
-    step_count = geodesic_curve.shape[-2]
+    step_count = curve.shape[-2]
     # decode the geodesics
-    decoded_geodesic_curve = decoder(geodesic_curve)
+    decoded_curve = decoder(curve)
     # Compute energy (finite differences)
-    tangent_vectors = decoded_geodesic_curve[:,:,1:,:] - decoded_geodesic_curve[:,:,:-1,:] # shape (N,K,step_count-1,D)
+    tangent_vectors = decoded_curve[...,1:,:] - decoded_curve[...,:-1,:] # shape can be (N,K,step_count-1,D) for Riemanian K-means
+    # for batch of geodesics it can be [batch_size, stepcount-1,D]
     if reduction == "none":
         energy = (tangent_vectors**2).sum(dim=(-2,-1)) # comute Euclidean energies of the curves in R^D
     if reduction == "sum":
@@ -204,23 +183,12 @@ def compute_energy(mode, parameters_of_geodesics, end_points, decoder, geodesic_
     # Warning! by default the outpiut is the single scalar, i.e the mean of all the energies among N*K geodesics
     return energy
 
-def compute_lengths(mode, parameters_of_geodesics, end_points, decoder, geodesic_solver=None, 
-                    reduction="none", device = "cuda", periodicity_mode = True, return_geodesic_curve = False):
+def compute_lengths(curve, decoder, reduction="none"):
     """
     Computes the lengths of geodesic curves in Euclidean space.
 
     Parameters:
-    mode: str
-        Determines the method used to compute geodesics. Options:
-        - "Interpolation_points": Uses interpolation-based geodesics.
-        - "Schauder": Uses Schauder basis representation for geodesics.
-    parameters_of_geodesics: torch.Tensor
-        Coefficients or parameters defining the geodesic curves.
-        - Shape depends on the chosen mode.
-    end_points: tuple
-        A tuple containing:
-        - starting_points (torch.Tensor): Initial points of geodesics.
-        - final_points (torch.Tensor): Final points of geodesics.
+    curve: torch.Tensor of shape [batch_size,step_count,dimension]
     decoder: callable, optional (default=torus_ae.decoder_torus)
         A function that decodes geodesic curves from their latent representation.
     geodesic_solver: NumericalGeodesics
@@ -231,23 +199,15 @@ def compute_lengths(mode, parameters_of_geodesics, end_points, decoder, geodesic
         A tensor containing the computed Euclidean lengths of all geodesic curves.
         - Shape: (batch_size, step_count - 1).
     """
-    if mode == "Interpolation_points":
-        geodesic_curve = geodesics_from_parameters_interpolation_points(parameters_of_geodesics, end_points)
-    elif mode == "Schauder":
-        geodesic_curve = geodesics_from_parameters_schauder(geodesic_solver, parameters_of_geodesics, end_points, periodicity_mode=periodicity_mode)
-    geodesic_curve = geodesic_curve.to(device)
-    decoded_geodesic_curve = decoder(geodesic_curve)
-    tangent_vectors = decoded_geodesic_curve[:,:,1:,:] - decoded_geodesic_curve[:,:,:-1,:]
+    decoded_curve = decoder(curve)
+    tangent_vectors = decoded_curve[...,1:,:] - decoded_curve[...,:-1,:]
     if reduction == "none":
         lengths = (tangent_vectors).norm(dim=(-1)).sum(dim=(-1)) # first find all norms of small tangent vectors in the discretization then sum them for each geodesic
     if reduction == "sum":
         lengths = (tangent_vectors).norm(dim=(-1)).sum()
     if reduction == "old":    
         lengths = torch.sqrt((tangent_vectors**2).sum(dim=(-2,-1))) # seems to be a wrong formula
-    # Warning! by default the outpiut is the vector of length of all geodesics 
-    if return_geodesic_curve == True:
-        return geodesic_curve, lengths
-    else:
+    # Warning! by default the outpiut is the tensor of length of all geodesics 
         return lengths
 
 # ---------------------------------------
@@ -503,85 +463,6 @@ def plot_knn_decision_boundary(encoded_points, labels_for_coloring,
         plt.close()
     return
 
-#older version without interpolation. to be deprecated
-def plot_knn_decision_boundary_nonsmooth(encoded_points, labels_for_coloring, 
-        grid_resolution = 100, 
-        neighbours_number = 7, distance_computation_mode = "torus",
-        verbose=True, plot_title=None, 
-        save_plot=True, saving_folder=None, 
-        file_saving_name=None, cmap_points='jet',
-        cmap_background='coolwarm'):
-    """
-    Plots the decision boundary of a k-Nearest Neighbors (k-NN) classifier in a 2D latent space.
-
-    Parameters:
-    - encoded_points: Tensor of shape (N, 2), representing data points in a 2D latent space.
-    - labels_for_coloring: Tensor of shape (N,), representing class labels of encoded points.
-    - grid_resolution: Number of points per axis to create a uniform grid.
-    - neighbours_number: Number of neighbors to consider in k-NN classification.
-    - verbose: If True, displays the plot.
-    - save_plot: If True, saves the plot as a PDF file.
-    - saving_folder: Directory where the plot should be saved (if save_plot is True).
-    - file_saving_name: Name of the saved plot file.
-    - cmap_points: Colormap for original data points.
-    - cmap_background: Colormap for decision boundary regions.
-
-    Steps:
-    1. Generate a uniform grid of points covering the range [-pi, pi]².
-    2. Compute the Euclidean distances between grid points and encoded data points.
-    3. Determine the k nearest neighbors for each grid point.
-    4. Assign cluster labels to grid points based on majority vote from neighbors.
-    5. Plot the decision boundary along with the original data points.
-    """
-    # 1. Create a dense uniform grid in [-pi, pi]^2
-    x_vals = torch.linspace(-torch.pi, torch.pi, grid_resolution)
-    y_vals = torch.linspace(-torch.pi, torch.pi, grid_resolution)
-    grid_x, grid_y = torch.meshgrid(x_vals, y_vals, indexing="ij")
-    grid_points = torch.stack([grid_x.flatten(), grid_y.flatten()], dim=1)  # Shape: (grid_size^2, 2)
-
-    # 2. Compute pairwise Euclidean distances between grid points and encoded data
-    # if distance_mode == "torus"
-    # (||x - y||^2 = (x1 - y1)^2 + (x2 - y2)^2)
-    # or using torus periodicity
-    if distance_computation_mode =="plane":
-        dists = torch.cdist(grid_points, encoded_points)  # Shape: (grid_size^2, N_encoded)
-    elif distance_computation_mode == "torus":
-        coordinate_wise_distances = torch.abs(grid_points[:,None,:] - encoded_points[None,:,:]) #shape (grid_size^2, N_encoded, dim)
-        coordinate_wise_distances_torus = torch.min(coordinate_wise_distances, 2*torch.pi - coordinate_wise_distances)
-        dists = coordinate_wise_distances_torus.norm(dim = 2) # Shape: (grid_size^2, N_encoded)
-    # 3. Find the indices of the k=neighbours_number nearest neighbors
-    _, nn_indices = torch.topk(dists, k=neighbours_number, largest=False, dim=1)  # Get indices of k=neighbours_number nearest neighbors
-
-    # 4. Assign cluster labels by majority vote
-    nn_labels = labels_for_coloring[nn_indices]  # Retrieve labels of nearest neighbors
-    grid_labels, _ = torch.mode(nn_labels, dim=1)  # Majority vote
-
-    # 5. Plot results
-    plt.figure(figsize=(8, 6))
-
-    # Plot the grid colored by assigned cluster
-    plt.scatter(grid_points[:, 0], grid_points[:, 1], c=grid_labels, cmap=cmap_background, alpha=0.3, marker='s', s=10)
-
-    # Overlay original encoded points
-    plt.scatter(encoded_points[:, 0], encoded_points[:, 1], c=labels_for_coloring, cmap=cmap_points, edgecolors='k', s=40)
-
-    # Set plot limits and labels
-    plt.xlim(-torch.pi, torch.pi)
-    plt.ylim(-torch.pi, torch.pi)
-    plt.xlabel("Latent Dimension 1")
-    plt.ylabel("Latent Dimension 2")
-    if plot_title==None:
-        plt.title(f"{file_saving_name.replace('_',' ')} via {neighbours_number}-NN")
-    else:
-        plt.title(plot_title)
-    if save_plot==True:
-        plt.savefig(f"{saving_folder}/{file_saving_name}.pdf",bbox_inches='tight', format="pdf")
-        print(f"Decision boundary plot saved as{saving_folder}/{file_saving_name}.pdf")
-    if verbose==True:
-        plt.show()
-
-
-
 #-----------------
 # Clustering evaluation F-measure
 # Function to compute the set of pairs in the same cluster
@@ -761,7 +642,7 @@ def Riemannian_k_means_fit(encoded_points, params):
     if mode == "Interpolation_points":
         geodesic_solver = None
         # Initialize geodesic segments
-        parameters_of_geodesics = construct_interpolation_points_on_segments_connecting_centers2encoded_data(
+        parameters_of_geodesics = construct_linear_segments(
                 encoded_points, 
                 initial_centroids, 
                 num_aux_points = step_count)
@@ -797,19 +678,18 @@ def Riemannian_k_means_fit(encoded_points, params):
     for iter_outer in t:    
         # Inner loop (refining geodesics)
         for iter_inner in range(num_iter_inner):
-    #for iter_outer in range(num_iter_outer):
-        # Inner loop (refining geodesics)
-    #    for iter_inner in range(num_iter_inner):
             optimizer.zero_grad()  # Zero gradients
             # Compute the loss
+            # Compute the geodesic curves connecting K centers to each of N points
+            geodesic_curve = geodesics_from_parameters(parameters_of_geodesics, 
+                                    end_points=[encoded_points, current_centroids],
+                                    mode=mode)
+            geodesic_curve = geodesic_curve.to(device)
+            # Compute energies
             energies_of_geodesics = compute_energy(
-                    mode = mode, 
-                    parameters_of_geodesics=parameters, 
-                    end_points = [encoded_points, current_centroids],
+                    curve=geodesic_curve,
                     decoder = torus_ae.decoder_torus,
-                    geodesic_solver = geodesic_solver,
-                    reduction="none", device=device, 
-                    periodicity_mode=periodicity_mode)
+                    reduction="none")
             loss_geodesics = energies_of_geodesics.sum()
             # Backpropagation: compute gradients
             loss_geodesics.backward()
@@ -821,15 +701,14 @@ def Riemannian_k_means_fit(encoded_points, params):
         # compute geodesic_curve of shape (N,K,step_count,d)
         # compute a vector of length of all geodesics shape (N,K)
         with torch.no_grad():
-            geodesic_curve, lengths_of_geodesics = compute_lengths(
-                    mode = mode,
-                    parameters_of_geodesics=parameters,
-                    end_points = [encoded_points, current_centroids],
+            geodesic_curve = geodesics_from_parameters(parameters_of_geodesics, 
+                                    end_points=[encoded_points, current_centroids],
+                                    mode=mode)
+            geodesic_curve = geodesic_curve.to(device)
+            lengths_of_geodesics = compute_lengths(
+                    curve=geodesic_curve,
                     decoder = torus_ae.decoder_torus,
-                    geodesic_solver = geodesic_solver,
-                    reduction="none", device=device, 
-                    periodicity_mode=periodicity_mode,
-                    return_geodesic_curve=True) 
+                    reduction="none") 
         lengths_of_geodesics = lengths_of_geodesics.cpu() # shape (N,K)
         geodesic_curve = geodesic_curve.cpu()
 
@@ -881,7 +760,8 @@ def Riemannian_k_means_fit(encoded_points, params):
         }
         history.append( history_item )
         t.set_description(f"Outer Loop iteration: {iter_outer+1}, Centroid gradient norm:{average_Frechet_mean_gradient_norm:.4f}, Total geodesic energy:{loss_geodesics:.4f}")  # Update description dynamically
-    #timing
+    # end outer loop
+    # timing
     end_time = time.time()
     algorithm_execution_time = end_time - start_time
     results = {
