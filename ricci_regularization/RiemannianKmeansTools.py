@@ -205,10 +205,10 @@ def compute_lengths(curve, decoder, reduction="none"):
         lengths = (tangent_vectors).norm(dim=(-1)).sum(dim=(-1)) # first find all norms of small tangent vectors in the discretization then sum them for each geodesic
     if reduction == "sum":
         lengths = (tangent_vectors).norm(dim=(-1)).sum()
-    if reduction == "old":    
+    if reduction == "old":    # option to be removed
         lengths = torch.sqrt((tangent_vectors**2).sum(dim=(-2,-1))) # seems to be a wrong formula
     # Warning! by default the outpiut is the tensor of length of all geodesics 
-        return lengths
+    return lengths
 
 # ---------------------------------------
 #plotting
