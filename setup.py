@@ -33,7 +33,8 @@ setup(
         "jupyter",
         "ipywidgets",
         "pypdf",
-        "umap-learn"
+        "umap-learn",
+        "trimesh"
     ],
 
     keywords='',
