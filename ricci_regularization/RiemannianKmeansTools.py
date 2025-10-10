@@ -536,7 +536,7 @@ def get_validation_dataset(yaml_config):
     validation_dataset = dict.get("test_dataset")  # Assuming 'test_dataset' is a key returned by get_dataloaders
 
     # Loading the pre-tained AE
-    torus_ae, Path_ae_weights = ricci_regularization.DataLoaders.get_tuned_nn(config=yaml_config)
+    torus_ae, Path_ae_weights = ricci_regularization.DataLoaders.get_tuned_nn(config=yaml_config, additional_path="../")
     torus_ae.cpu()
     torus_ae.eval()
     return torus_ae, validation_dataset
@@ -683,7 +683,7 @@ def Riemannian_k_means_fit(encoded_points, params):
             # Compute the geodesic curves connecting K centers to each of N points
             geodesic_curve = geodesics_from_parameters(parameters_of_geodesics, 
                                     end_points=[encoded_points, current_centroids],
-                                    mode=mode)
+                                    mode=mode, basis=basis)
             geodesic_curve = geodesic_curve.to(device)
             # Compute energies
             energies_of_geodesics = compute_energy(
@@ -703,7 +703,7 @@ def Riemannian_k_means_fit(encoded_points, params):
         with torch.no_grad():
             geodesic_curve = geodesics_from_parameters(parameters_of_geodesics, 
                                     end_points=[encoded_points, current_centroids],
-                                    mode=mode)
+                                    mode=mode, basis=basis)
             geodesic_curve = geodesic_curve.to(device)
             lengths_of_geodesics = compute_lengths(
                     curve=geodesic_curve,
