@@ -12,7 +12,7 @@ The repository is structured as follows. We only describe the most important fil
 |  |-- Architectures.py : Choice of AE architectures: TorusAE, TorusConvAE, etc.
 |  |-- DataLoaders.py : Dataset loading and neural net weights loading.
 |  |-- FiniteDifferences.py : Computing all useful Riemannian geometry tensors via Finite differences.
-|  |-- Losscomputation.py : Train,test and loss comutation functions.
+|  |-- LossComputation.py : Train,test and loss comutation functions.
 |  |-- OODTools.py : functions for OOD sampling
 |  |-- PlottingTools.py : Plotting in latent space: Manifold plots, heatmaps, etc..
 |  |-- Ricci.py : Computing all useful Riemannian geometry tensors via Autograd
@@ -22,10 +22,12 @@ The repository is structured as follows. We only describe the most important fil
 
 
 |-- ipynb: Contains Python notebooks which demonstrate how the code works. Most important files:
-|  |-- AE_torus_training.ipynb: training of the AE 
-|  |-- AE_torus_report.ipynb: building the report
-
-|-- Benchmarks: TODO
+|  |-- AE_torus_training.ipynb:             training of the AE 
+|  |-- AE_torus_report.ipynb:               building the report
+|  |-- Geodesic_grids_via_Schauder.ipynb:   building geodesic grids
+|  |-- Torus3dembedding.ipynb               quasi-isometric Torus 3d embedding
+|  |-- Benchmarks:TODO
+|  |  |-- Chapter_1_Datasets-Visualization.ipynb
 |-- README.md: This file
 ```
 
