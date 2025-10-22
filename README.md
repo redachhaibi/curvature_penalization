@@ -37,28 +37,34 @@ Step 1:
 Train the neural net with curvature regularization by launching ipynb/AE_torus_training.ipynb. Save weights.
 
 Step 2:
-Input: Results of Step 1: weigts of pre-trained autoencoder.
 Generate and visualize the report of the training. Launch ipynb/AE_torus_report.ipynb.
 
+Requirements: Results of Step 1: weights of pre-trained autoencoder.
+
 Step 3:
-Input: Results of Step 1: weigts of pre-trained autoencoder.
 Check the geodesics in the latent space. Launch ipynb/Benchmarks/Geodesic_grids.ipynb.
 
+Requirements: Results of Step 1: weights of pre-trained autoencoder.
+
 Step 4:
-Input: Results of Step 1: weigts of pre-trained autoencoder.
 Check the quasi-isometric embedding of the Torus latent space. Launch ipynb/Benchmarks/torus3dembedding_training.ipynb 
 
+Requirements: Results of Step 1: weights of pre-trained autoencoder.
+
 Step 5:
-Input: Results of Step 4.
 Visualize torus 3d embedding with ipynb/Benchmarks/torus3dembedding_visualization.ipynb
 
+Requirements: Results of Step 4.
+
 Step 6:
-Input: Results of Step 1: weigts of pre-trained autoencoder.
 Perform clustering. Launch ipynb/Benchmarks/Chapter_5_multiple_RiemannianK-means_execution.ipynb.
 
+Requirements: Results of Step 1: weights of pre-trained autoencoder.
+
 Step 7:
-Input: Results of Step 5: points selected for clustering, labels assigned by Riemannian K-means. 
 Visualize clustering results with ipynb/Visualization/Chapter_5_Octopus_plotting.ipynb. Perform Euclidean clustering, compute F-scores and Voronoi's cells with ipynb/Visualization/Chapter_5_Clustering_report.ipynb
+
+Requirements: Results of Step 5: points selected for clustering, labels assigned by Riemannian K-means. 
 
 ## Installation
 
@@ -108,6 +114,20 @@ python setup.py develop
 7. Additionnal packages which could be removed in ulterior versions
 ```bash
 pip install geomstats
+```
+## Cite us
+The curvature regularization and Riemannian K-means clustering are described in this thesis:
+
+```bash
+@PHDTHESIS{lazar2025,
+url = "http://www.theses.fr/2025TLSES029",
+title = "Régularisation métrique en apprentissage automatique avec des fonctionnelles de courbure",
+author = "Lazarev, Alexey",
+year = "2025",
+note = "Thèse de doctorat dirigée par Costantino, Francesco et Chhaibi, Reda Mathématiques et Applications Université de Toulouse (2023-....) 2025",
+note = "2025TLSES029",
+url = "http://www.theses.fr/2025TLSES029/document",
+}
 ```
 
 ## Configuration
