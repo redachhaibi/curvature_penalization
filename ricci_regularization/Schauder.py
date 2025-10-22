@@ -156,13 +156,22 @@ class NumericalGeodesics():
         return linear_curve.cpu().detach().numpy(), geodesic_curve.cpu().detach().numpy()
     
     #parallelized geodesic computation
-    def computeGeodesicInterpolationBatch(self, generator, m1_batch, m2_batch, epochs, optimizer_info, display_info, 
+    def computeGeodesicInterpolationBatch(self, generator, m1_batch, m2_batch, epochs, optimizer_info = None, display_info = None, 
                                           device = "cuda"):
         """
         Compute geodesics for a batch of start and end points.
         Connects points of m1_batch to respective points of m2_batch
         m1_batch, m2_batch : torch.Tensor of shape (batch_size, dim)
         """
+        if optimizer_info == None:
+            optimizer_info = {
+                "name": "Adam",   # optimizer class name as string
+                "args": {
+                    "lr": 0.01     # learning rate
+                    # "betas": (0.9, 0.999)  # optional for Adam
+                }
+            }
+            print("using default optimizer params:", optimizer_info)
         N_max = self.schauder_bases["zero_boundary"]["N_max"]
         basis = self.schauder_bases["zero_boundary"]["basis"]  # (step_count, N_max)
         basis = basis.to(device)

@@ -153,7 +153,7 @@ def geodesics_from_parameters(parameters_of_geodesics, end_points, mode = "Schau
 
 def compute_energy(curve, decoder, reduction = "mean"):
     """
-    Computes the energy of a geodesic curve using finite differences.
+    Computes the energies of a batch of geodesic curves using finite differences.
 
     Parameters:
     curve: torch.Tensor of shape [batch_size,step_count,dimension]
@@ -178,7 +178,9 @@ def compute_energy(curve, decoder, reduction = "mean"):
     if reduction == "sum":
         energy = (tangent_vectors**2).sum()
     if reduction == "mean":
-        energy = (tangent_vectors**2).sum(dim=(-2,-1)).mean() # 
+        energy = (tangent_vectors**2).sum(dim=(-2,-1)).mean() #
+    else:
+        KeyError("Reduction should be: none, sum or mean")
     energy *= (step_count - 1) # correct normalization of finite differences energy computation
     # Warning! by default the outpiut is the single scalar, i.e the mean of all the energies among N*K geodesics
     return energy

@@ -107,7 +107,7 @@ python setup.py develop
 
 7. Additionnal packages which could be removed in ulterior versions
 ```bash
-pip install stochman geomstats
+pip install geomstats
 ```
 
 ## Configuration
