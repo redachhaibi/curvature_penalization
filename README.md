@@ -116,7 +116,7 @@ python setup.py develop
 pip install geomstats
 ```
 ## Cite us
-The curvature regularization and Riemannian K-means clustering are described in this [thesis] (http://www.theses.fr/2025TLSES029). To cite it one can use:
+The curvature regularization and Riemannian K-means clustering are described in this [thesis](http://www.theses.fr/2025TLSES029). To cite it one can use:
 
 ```bash
 @PHDTHESIS{lazar2025,
